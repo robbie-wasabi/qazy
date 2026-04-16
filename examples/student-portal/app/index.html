@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Student Portal Example</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="layout">
+      <section class="shell">
+        <header class="masthead">
+          <div>
+            <p class="eyebrow">Example App</p>
+            <h1>Student portal</h1>
+          </div>
+          <button id="profile-toggle" class="button secondary hidden" type="button" aria-expanded="false">
+            Profile
+          </button>
+        </header>
+
+        <section id="login-panel" class="panel">
+          <h2>Sign in</h2>
+          <p class="muted">Use the student test account to open the dashboard.</p>
+          <form id="login-form" class="stack">
+            <label>
+              Email
+              <input id="email" name="email" type="email" autocomplete="email" required>
+            </label>
+            <label>
+              Password
+              <input id="password" name="password" type="password" autocomplete="current-password" required>
+            </label>
+            <p id="login-error" class="error" aria-live="polite"></p>
+            <button class="button" type="submit">Continue</button>
+          </form>
+        </section>
+
+        <section id="dashboard" class="panel hidden">
+          <div class="banner">
+            <p class="eyebrow">Dashboard</p>
+            <h2>Welcome back, Student</h2>
+            <p class="muted">You have 2 upcoming assignments this week.</p>
+          </div>
+
+          <div class="cards">
+            <article class="card">
+              <h3>Physics Lab</h3>
+              <p>Due Thursday at 4:00 PM</p>
+              <span class="pill">In progress</span>
+            </article>
+            <article class="card">
+              <h3>History Essay</h3>
+              <p>Due Friday at 9:00 AM</p>
+              <span class="pill">Ready to review</span>
+            </article>
+          </div>
+        </section>
+
+        <aside id="profile-menu" class="panel hidden" aria-live="polite">
+          <h2>Profile</h2>
+          <p class="muted">Signed in as</p>
+          <p id="profile-email" class="profile-email">student@example.com</p>
+        </aside>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

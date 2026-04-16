@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "defaultTarget": "local",
+  "targets": {
+    "local": {
+      "mode": "managed",
+      "baseUrl": "http://127.0.0.1:{appPort}",
+      "devCommand": "python3 ../_shared/serve_static.py app",
+      "ports": {
+        "appPort": "auto"
+      },
+      "env": {
+        "PORT": "{appPort}"
+      },
+      "ready": {
+        "type": "http",
+        "path": "/index.html",
+        "timeoutSeconds": 30
+      },
+      "parallelSafe": true,
+      "scenarioDefaults": {
+        "startPage": "/index.html",
+        "useCookie": false
+      }
+    }
+  }
+}

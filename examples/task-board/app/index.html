@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Task Board Example</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="layout">
+      <section class="board">
+        <header class="hero">
+          <div>
+            <p class="eyebrow">Example App</p>
+            <h1>Task board</h1>
+            <p class="muted">Track quick study tasks and switch between active and completed views.</p>
+          </div>
+          <div id="summary" class="summary" aria-live="polite">0 total / 0 completed</div>
+        </header>
+
+        <form id="task-form" class="composer">
+          <label class="grow" for="task-input">New task</label>
+          <input id="task-input" name="task" type="text" autocomplete="off" required>
+          <button class="button" type="submit">Add task</button>
+        </form>
+
+        <nav class="filters" aria-label="Task filters">
+          <button class="button secondary active" type="button" data-filter="all">All</button>
+          <button class="button secondary" type="button" data-filter="active">Active</button>
+          <button class="button secondary" type="button" data-filter="completed">Completed</button>
+        </nav>
+
+        <ul id="task-list" class="task-list" aria-live="polite"></ul>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
