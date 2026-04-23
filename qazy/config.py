@@ -23,6 +23,7 @@ class ReadyCheck:
 AUTH_PROVIDERS = ("nextauth", "better-auth")
 DEFAULT_AUTH_PROVIDER = "nextauth"
 DEFAULT_BETTER_AUTH_COOKIE_PREFIX = "better-auth"
+DEFAULT_AUTH_BASE_PATH = "/api/auth"
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class ScenarioDefaults:
     use_cookie: bool | None = None
     auth_provider: str | None = None
     auth_cookie_prefix: str | None = None
+    auth_base_path: str | None = None
 
     def has_values(self) -> bool:
         return any(
@@ -44,6 +46,7 @@ class ScenarioDefaults:
                 self.use_cookie,
                 self.auth_provider,
                 self.auth_cookie_prefix,
+                self.auth_base_path,
             )
         )
 
@@ -398,7 +401,15 @@ def parse_scenario_defaults(config_path: Path, target_name: str, payload: object
             f"Invalid Qazy config at {config_path}: target '{target_name}' scenarioDefaults must be an object"
         )
 
-    allowed_keys = {"email", "password", "startPage", "useCookie", "authProvider", "authCookiePrefix"}
+    allowed_keys = {
+        "email",
+        "password",
+        "startPage",
+        "useCookie",
+        "authProvider",
+        "authCookiePrefix",
+        "authBasePath",
+    }
     unknown_keys = sorted(set(payload) - allowed_keys)
     if unknown_keys:
         joined = ", ".join(unknown_keys)
@@ -454,6 +465,15 @@ def parse_scenario_defaults(config_path: Path, target_name: str, payload: object
             "must be a non-empty string"
         )
 
+    auth_base_path = payload.get("authBasePath")
+    if auth_base_path is not None and (
+        not isinstance(auth_base_path, str) or not auth_base_path.strip().startswith("/")
+    ):
+        raise RuntimeError(
+            f"Invalid Qazy config at {config_path}: target '{target_name}' scenarioDefaults.authBasePath "
+            "must be a non-empty string starting with '/'"
+        )
+
     return ScenarioDefaults(
         email=email,
         password=password,
@@ -461,6 +481,7 @@ def parse_scenario_defaults(config_path: Path, target_name: str, payload: object
         use_cookie=use_cookie,
         auth_provider=auth_provider,
         auth_cookie_prefix=auth_cookie_prefix,
+        auth_base_path=auth_base_path,
     )
 
 

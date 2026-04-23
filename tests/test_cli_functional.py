@@ -1719,6 +1719,45 @@ class AuthProvidersTests(QazyCliFunctionalTests):
         self.assertIn("cookies set better-auth.session_token fake-session", commands)
         self.assertNotIn("next-auth.session-token", commands)
 
+    def test_better_auth_honors_custom_base_path(self) -> None:
+        bin_dir = self.bin_dir
+        custom_script = bin_dir / "pnpm-better-auth-rebased"
+        rebased = FAKE_PNPM_BETTER_AUTH.replace(
+            '"/api/auth/sign-in/email"',
+            '"/auth/sign-in/email"',
+        )
+        make_executable(custom_script, rebased)
+
+        config = self.better_auth_config_payload()
+        config["targets"]["local-mem"]["devCommand"] = "pnpm-better-auth-rebased dev:mem"
+        config["targets"]["local-mem"]["scenarioDefaults"] = {
+            "authProvider": "better-auth",
+            "authBasePath": "/auth",
+        }
+        self.write_config(config)
+        self.write_scenario(
+            "ba-basepath.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /dashboard
+            use_cookie: true
+            ---
+
+            ## list
+            - [ ] custom auth base path resolves correctly
+            """,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["run", "--project-root", str(self.root), "user-scenarios/ba-basepath"])
+
+        self.assertEqual(exit_code, 0)
+        commands = self.browser_log.read_text(encoding="utf-8")
+        self.assertIn("cookies set better-auth.session_token fake-session", commands)
+
     def test_invalid_auth_provider_in_frontmatter_is_rejected(self) -> None:
         self.write_scenario(
             "bad-provider.scenario.md",

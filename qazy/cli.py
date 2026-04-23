@@ -592,6 +592,12 @@ def add_frontmatter_override_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Override Better Auth cookie prefix (default: better-auth)",
     )
+    parser.add_argument(
+        "--auth-base-path",
+        dest="auth_base_path",
+        default=None,
+        help="Override auth handler base path (default: /api/auth)",
+    )
 
 
 def workspace_from_args(args: argparse.Namespace, *, config_results_dir: Path | None = None):
@@ -611,6 +617,7 @@ def scenario_overrides_from_args(args: argparse.Namespace) -> ScenarioOverrides 
         use_cookie=getattr(args, "use_cookie", None),
         auth_provider=getattr(args, "auth_provider", None),
         auth_cookie_prefix=getattr(args, "auth_cookie_prefix", None),
+        auth_base_path=getattr(args, "auth_base_path", None),
     )
     if not overrides.has_overrides():
         return None

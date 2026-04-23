@@ -24,6 +24,7 @@ from pathlib import Path
 
 from .config import (
     AUTH_PROVIDERS,
+    DEFAULT_AUTH_BASE_PATH,
     DEFAULT_AUTH_PROVIDER,
     DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
     ReadyCheck,
@@ -54,6 +55,7 @@ FRONTMATTER_KEYS = {
     "use_cookie",
     "auth_provider",
     "auth_cookie_prefix",
+    "auth_base_path",
 }
 
 AGENT_BROWSER_GUIDE = """\
@@ -124,6 +126,7 @@ class ScenarioSection:
     use_cookie: bool
     auth_provider: str
     auth_cookie_prefix: str
+    auth_base_path: str
     body: str
     provided_keys: frozenset[str] = frozenset()
 
@@ -138,6 +141,7 @@ class Scenario:
     use_cookie: bool
     auth_provider: str
     auth_cookie_prefix: str
+    auth_base_path: str
     body: str
     raw_content: str
     sections: list[ScenarioSection]
@@ -151,6 +155,7 @@ class ScenarioOverrides:
     use_cookie: bool | None = None
     auth_provider: str | None = None
     auth_cookie_prefix: str | None = None
+    auth_base_path: str | None = None
 
     def has_overrides(self) -> bool:
         return any(
@@ -162,6 +167,7 @@ class ScenarioOverrides:
                 self.use_cookie,
                 self.auth_provider,
                 self.auth_cookie_prefix,
+                self.auth_base_path,
             )
         )
 
@@ -287,6 +293,7 @@ def build_scenario(
             use_cookie=bool(s["use_cookie"]),
             auth_provider=str(s["auth_provider"]),
             auth_cookie_prefix=str(s["auth_cookie_prefix"]),
+            auth_base_path=str(s["auth_base_path"]),
             body=str(s["body"]),
             provided_keys=frozenset(s.get("_provided_keys", frozenset())),
         )
@@ -303,6 +310,7 @@ def build_scenario(
         use_cookie=bool(first["use_cookie"]),
         auth_provider=str(first["auth_provider"]),
         auth_cookie_prefix=str(first["auth_cookie_prefix"]),
+        auth_base_path=str(first["auth_base_path"]),
         body=str(first["body"]),
         raw_content=raw_content,
         sections=sections,
@@ -322,6 +330,11 @@ def override_section(section: ScenarioSection, overrides: ScenarioOverrides) -> 
         if overrides.auth_cookie_prefix is not None
         else section.auth_cookie_prefix
     )
+    auth_base_path = (
+        overrides.auth_base_path
+        if overrides.auth_base_path is not None
+        else section.auth_base_path
+    )
     return ScenarioSection(
         index=section.index,
         label=email or f"section-{section.index}",
@@ -331,6 +344,7 @@ def override_section(section: ScenarioSection, overrides: ScenarioOverrides) -> 
         use_cookie=use_cookie,
         auth_provider=auth_provider,
         auth_cookie_prefix=auth_cookie_prefix,
+        auth_base_path=auth_base_path,
         body=section.body,
         provided_keys=section.provided_keys,
     )
@@ -351,6 +365,7 @@ def apply_scenario_overrides(scenario: Scenario, overrides: ScenarioOverrides | 
         use_cookie=first.use_cookie,
         auth_provider=first.auth_provider,
         auth_cookie_prefix=first.auth_cookie_prefix,
+        auth_base_path=first.auth_base_path,
         body=first.body,
         raw_content=scenario.raw_content,
         sections=sections,
@@ -388,6 +403,13 @@ def apply_target_defaults_to_section(section: ScenarioSection, defaults: Scenari
     ):
         auth_cookie_prefix = defaults.auth_cookie_prefix
 
+    auth_base_path = section.auth_base_path
+    if (
+        "auth_base_path" not in section.provided_keys
+        and defaults.auth_base_path is not None
+    ):
+        auth_base_path = defaults.auth_base_path
+
     return ScenarioSection(
         index=section.index,
         label=email or f"section-{section.index}",
@@ -397,6 +419,7 @@ def apply_target_defaults_to_section(section: ScenarioSection, defaults: Scenari
         use_cookie=use_cookie,
         auth_provider=auth_provider,
         auth_cookie_prefix=auth_cookie_prefix,
+        auth_base_path=auth_base_path,
         body=section.body,
         provided_keys=section.provided_keys,
     )
@@ -417,6 +440,7 @@ def apply_target_defaults(scenario: Scenario, defaults: ScenarioDefaults) -> Sce
         use_cookie=first.use_cookie,
         auth_provider=first.auth_provider,
         auth_cookie_prefix=first.auth_cookie_prefix,
+        auth_base_path=first.auth_base_path,
         body=first.body,
         raw_content=scenario.raw_content,
         sections=sections,
@@ -431,6 +455,7 @@ def parse_scenario(content: str) -> dict[str, object]:
         "use_cookie": True,
         "auth_provider": DEFAULT_AUTH_PROVIDER,
         "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+        "auth_base_path": DEFAULT_AUTH_BASE_PATH,
         "body": "",
     }
     provided_keys: set[str] = set()
@@ -471,6 +496,13 @@ def parse_scenario(content: str) -> dict[str, object]:
                 raise RuntimeError("Scenario frontmatter auth_cookie_prefix must be non-empty")
             result["auth_cookie_prefix"] = value
             provided_keys.add("auth_cookie_prefix")
+        elif key == "auth_base_path":
+            if not value or not value.startswith("/"):
+                raise RuntimeError(
+                    "Scenario frontmatter auth_base_path must be a path starting with '/'"
+                )
+            result["auth_base_path"] = value
+            provided_keys.add("auth_base_path")
 
     result["body"] = content[match.end():].strip()
     result["_provided_keys"] = frozenset(provided_keys)
@@ -535,6 +567,7 @@ def parse_sections(content: str) -> list[dict[str, object]]:
             "use_cookie": True,
             "auth_provider": DEFAULT_AUTH_PROVIDER,
             "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+            "auth_base_path": DEFAULT_AUTH_BASE_PATH,
             "body": body,
         }
         provided_keys: set[str] = set()
@@ -570,6 +603,13 @@ def parse_sections(content: str) -> list[dict[str, object]]:
                     raise RuntimeError("Scenario frontmatter auth_cookie_prefix must be non-empty")
                 result["auth_cookie_prefix"] = value
                 provided_keys.add("auth_cookie_prefix")
+            elif key == "auth_base_path":
+                if not value or not value.startswith("/"):
+                    raise RuntimeError(
+                        "Scenario frontmatter auth_base_path must be a path starting with '/'"
+                    )
+                result["auth_base_path"] = value
+                provided_keys.add("auth_base_path")
 
         result["_provided_keys"] = frozenset(provided_keys)
         sections.append(result)
@@ -723,20 +763,33 @@ def authenticate(
     *,
     provider: str = DEFAULT_AUTH_PROVIDER,
     cookie_prefix: str = DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+    base_path: str = DEFAULT_AUTH_BASE_PATH,
 ) -> AuthSession:
     if provider == "nextauth":
-        return authenticate_nextauth(base_url, email, password)
+        return authenticate_nextauth(base_url, email, password, base_path=base_path)
     if provider == "better-auth":
-        return authenticate_better_auth(base_url, email, password, cookie_prefix=cookie_prefix)
+        return authenticate_better_auth(
+            base_url, email, password, cookie_prefix=cookie_prefix, base_path=base_path
+        )
     joined = ", ".join(AUTH_PROVIDERS)
     raise RuntimeError(f"Unknown auth provider '{provider}'. Expected one of: {joined}")
 
 
-def authenticate_nextauth(base_url: str, email: str, password: str) -> AuthSession:
+def _auth_url(base_url: str, base_path: str, suffix: str) -> str:
+    return f"{base_url.rstrip('/')}{base_path.rstrip('/')}{suffix}"
+
+
+def authenticate_nextauth(
+    base_url: str,
+    email: str,
+    password: str,
+    *,
+    base_path: str = DEFAULT_AUTH_BASE_PATH,
+) -> AuthSession:
     jar = CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
-    csrf_resp = opener.open(f"{base_url}/api/auth/csrf", timeout=10)
+    csrf_resp = opener.open(_auth_url(base_url, base_path, "/csrf"), timeout=10)
     csrf_data = json.loads(csrf_resp.read().decode())
     csrf_token = csrf_data.get("csrfToken", "")
 
@@ -749,7 +802,7 @@ def authenticate_nextauth(base_url: str, email: str, password: str) -> AuthSessi
         }
     ).encode()
     request = urllib.request.Request(
-        f"{base_url}/api/auth/callback/credentials",
+        _auth_url(base_url, base_path, "/callback/credentials"),
         data=form_data,
         method="POST",
     )
@@ -773,13 +826,14 @@ def authenticate_better_auth(
     password: str,
     *,
     cookie_prefix: str = DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+    base_path: str = DEFAULT_AUTH_BASE_PATH,
 ) -> AuthSession:
     jar = CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
     payload = json.dumps({"email": email, "password": password}).encode()
     request = urllib.request.Request(
-        f"{base_url}/api/auth/sign-in/email",
+        _auth_url(base_url, base_path, "/sign-in/email"),
         data=payload,
         method="POST",
     )
@@ -853,6 +907,7 @@ def build_prompt_scenario(prompt: str) -> Scenario:
                 "use_cookie": True,
                 "auth_provider": DEFAULT_AUTH_PROVIDER,
                 "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+                "auth_base_path": DEFAULT_AUTH_BASE_PATH,
                 "body": prompt.strip(),
                 "_provided_keys": frozenset(),
             }
@@ -1206,6 +1261,7 @@ def _run_single_section(
                 section.password,
                 provider=section.auth_provider,
                 cookie_prefix=section.auth_cookie_prefix,
+                base_path=section.auth_base_path,
             )
             log(f"authenticated as {section.email}", prefix=section_prefix, color=color)
             prime_browser(

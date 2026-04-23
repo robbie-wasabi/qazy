@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Better Auth Portal — Sign In</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="card">
+      <h1>Sign in</h1>
+      <p class="muted">Use <code>student@example.com</code> / <code>tester123</code>.</p>
+      <form id="login-form" autocomplete="off">
+        <label>
+          Email
+          <input type="email" name="email" required />
+        </label>
+        <label>
+          Password
+          <input type="password" name="password" required />
+        </label>
+        <button type="submit">Sign in</button>
+        <p id="login-error" class="error" role="alert"></p>
+      </form>
+    </main>
+    <script>
+      const form = document.querySelector("#login-form");
+      const errorEl = document.querySelector("#login-error");
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        errorEl.textContent = "";
+        const data = new FormData(form);
+        const response = await fetch("/api/auth/sign-in/email", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: String(data.get("email") || "").trim(),
+            password: String(data.get("password") || ""),
+          }),
+        });
+        if (!response.ok) {
+          errorEl.textContent = "Invalid credentials.";
+          return;
+        }
+        window.location.href = "/dashboard";
+      });
+    </script>
+  </body>
+</html>

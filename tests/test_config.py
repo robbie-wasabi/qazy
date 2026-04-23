@@ -238,6 +238,58 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "authProvider"):
                 load_config(root)
 
+    def test_load_config_parses_auth_base_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "scenarioDefaults": {"authBasePath": "/auth"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        target = get_target(config, None)
+        self.assertEqual(target.scenario_defaults.auth_base_path, "/auth")
+
+    def test_load_config_rejects_auth_base_path_without_leading_slash(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "scenarioDefaults": {"authBasePath": "auth"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "authBasePath"):
+                load_config(root)
+
     def test_load_config_rejects_empty_auth_cookie_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)

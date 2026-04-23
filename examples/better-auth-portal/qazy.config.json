@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "defaultTarget": "local",
+  "targets": {
+    "local": {
+      "mode": "managed",
+      "baseUrl": "http://127.0.0.1:{appPort}",
+      "devCommand": "python3 app/server.py",
+      "ports": {
+        "appPort": "auto"
+      },
+      "env": {
+        "PORT": "{appPort}"
+      },
+      "ready": {
+        "type": "http",
+        "path": "/",
+        "timeoutSeconds": 30
+      },
+      "parallelSafe": true,
+      "scenarioDefaults": {
+        "email": "student@example.com",
+        "password": "tester123",
+        "startPage": "/dashboard",
+        "useCookie": true,
+        "authProvider": "better-auth"
+      }
+    }
+  }
+}
