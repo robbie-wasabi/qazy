@@ -22,7 +22,16 @@ from dataclasses import dataclass
 from http.cookiejar import CookieJar
 from pathlib import Path
 
-from .config import ReadyCheck, ResolvedTarget, ScenarioDefaults, TargetDefinition, resolve_target
+from .config import (
+    AUTH_PROVIDERS,
+    DEFAULT_AUTH_PROVIDER,
+    DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+    ReadyCheck,
+    ResolvedTarget,
+    ScenarioDefaults,
+    TargetDefinition,
+    resolve_target,
+)
 from .reporting import UsageTotals, analyze_log, format_usage_inline
 from .runtimes import RuntimeAdapter, get_runtime, invoke_runtime, terminate_process_group
 
@@ -38,7 +47,14 @@ COLOR_PALETTE = (
     39, 45, 51, 75, 81, 111, 117, 141, 147, 177,
     190, 208, 214, 220, 154, 118, 48, 49,
 )
-FRONTMATTER_KEYS = {"email", "password", "start_page", "use_cookie"}
+FRONTMATTER_KEYS = {
+    "email",
+    "password",
+    "start_page",
+    "use_cookie",
+    "auth_provider",
+    "auth_cookie_prefix",
+}
 
 AGENT_BROWSER_GUIDE = """\
 ## agent-browser Quick Reference
@@ -106,6 +122,8 @@ class ScenarioSection:
     password: str
     start_page: str
     use_cookie: bool
+    auth_provider: str
+    auth_cookie_prefix: str
     body: str
     provided_keys: frozenset[str] = frozenset()
 
@@ -118,6 +136,8 @@ class Scenario:
     password: str
     start_page: str
     use_cookie: bool
+    auth_provider: str
+    auth_cookie_prefix: str
     body: str
     raw_content: str
     sections: list[ScenarioSection]
@@ -129,11 +149,20 @@ class ScenarioOverrides:
     password: str | None = None
     start_page: str | None = None
     use_cookie: bool | None = None
+    auth_provider: str | None = None
+    auth_cookie_prefix: str | None = None
 
     def has_overrides(self) -> bool:
         return any(
             value is not None
-            for value in (self.email, self.password, self.start_page, self.use_cookie)
+            for value in (
+                self.email,
+                self.password,
+                self.start_page,
+                self.use_cookie,
+                self.auth_provider,
+                self.auth_cookie_prefix,
+            )
         )
 
 
@@ -256,6 +285,8 @@ def build_scenario(
             password=str(s["password"]),
             start_page=str(s["start_page"]),
             use_cookie=bool(s["use_cookie"]),
+            auth_provider=str(s["auth_provider"]),
+            auth_cookie_prefix=str(s["auth_cookie_prefix"]),
             body=str(s["body"]),
             provided_keys=frozenset(s.get("_provided_keys", frozenset())),
         )
@@ -270,6 +301,8 @@ def build_scenario(
         password=str(first["password"]),
         start_page=str(first["start_page"]),
         use_cookie=bool(first["use_cookie"]),
+        auth_provider=str(first["auth_provider"]),
+        auth_cookie_prefix=str(first["auth_cookie_prefix"]),
         body=str(first["body"]),
         raw_content=raw_content,
         sections=sections,
@@ -281,6 +314,14 @@ def override_section(section: ScenarioSection, overrides: ScenarioOverrides) -> 
     password = overrides.password if overrides.password is not None else section.password
     start_page = overrides.start_page if overrides.start_page is not None else section.start_page
     use_cookie = overrides.use_cookie if overrides.use_cookie is not None else section.use_cookie
+    auth_provider = (
+        overrides.auth_provider if overrides.auth_provider is not None else section.auth_provider
+    )
+    auth_cookie_prefix = (
+        overrides.auth_cookie_prefix
+        if overrides.auth_cookie_prefix is not None
+        else section.auth_cookie_prefix
+    )
     return ScenarioSection(
         index=section.index,
         label=email or f"section-{section.index}",
@@ -288,6 +329,8 @@ def override_section(section: ScenarioSection, overrides: ScenarioOverrides) -> 
         password=password,
         start_page=start_page,
         use_cookie=use_cookie,
+        auth_provider=auth_provider,
+        auth_cookie_prefix=auth_cookie_prefix,
         body=section.body,
         provided_keys=section.provided_keys,
     )
@@ -306,6 +349,8 @@ def apply_scenario_overrides(scenario: Scenario, overrides: ScenarioOverrides | 
         password=first.password,
         start_page=first.start_page,
         use_cookie=first.use_cookie,
+        auth_provider=first.auth_provider,
+        auth_cookie_prefix=first.auth_cookie_prefix,
         body=first.body,
         raw_content=scenario.raw_content,
         sections=sections,
@@ -332,6 +377,17 @@ def apply_target_defaults_to_section(section: ScenarioSection, defaults: Scenari
     if "use_cookie" not in section.provided_keys and defaults.use_cookie is not None:
         use_cookie = defaults.use_cookie
 
+    auth_provider = section.auth_provider
+    if "auth_provider" not in section.provided_keys and defaults.auth_provider is not None:
+        auth_provider = defaults.auth_provider
+
+    auth_cookie_prefix = section.auth_cookie_prefix
+    if (
+        "auth_cookie_prefix" not in section.provided_keys
+        and defaults.auth_cookie_prefix is not None
+    ):
+        auth_cookie_prefix = defaults.auth_cookie_prefix
+
     return ScenarioSection(
         index=section.index,
         label=email or f"section-{section.index}",
@@ -339,6 +395,8 @@ def apply_target_defaults_to_section(section: ScenarioSection, defaults: Scenari
         password=password,
         start_page=start_page,
         use_cookie=use_cookie,
+        auth_provider=auth_provider,
+        auth_cookie_prefix=auth_cookie_prefix,
         body=section.body,
         provided_keys=section.provided_keys,
     )
@@ -357,6 +415,8 @@ def apply_target_defaults(scenario: Scenario, defaults: ScenarioDefaults) -> Sce
         password=first.password,
         start_page=first.start_page,
         use_cookie=first.use_cookie,
+        auth_provider=first.auth_provider,
+        auth_cookie_prefix=first.auth_cookie_prefix,
         body=first.body,
         raw_content=scenario.raw_content,
         sections=sections,
@@ -369,6 +429,8 @@ def parse_scenario(content: str) -> dict[str, object]:
         "password": "",
         "start_page": "/dashboard",
         "use_cookie": True,
+        "auth_provider": DEFAULT_AUTH_PROVIDER,
+        "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
         "body": "",
     }
     provided_keys: set[str] = set()
@@ -396,6 +458,19 @@ def parse_scenario(content: str) -> dict[str, object]:
         elif key == "use_cookie":
             result["use_cookie"] = value.lower() == "true"
             provided_keys.add("use_cookie")
+        elif key == "auth_provider":
+            if value not in AUTH_PROVIDERS:
+                joined = ", ".join(AUTH_PROVIDERS)
+                raise RuntimeError(
+                    f"Scenario frontmatter auth_provider must be one of: {joined}"
+                )
+            result["auth_provider"] = value
+            provided_keys.add("auth_provider")
+        elif key == "auth_cookie_prefix":
+            if not value:
+                raise RuntimeError("Scenario frontmatter auth_cookie_prefix must be non-empty")
+            result["auth_cookie_prefix"] = value
+            provided_keys.add("auth_cookie_prefix")
 
     result["body"] = content[match.end():].strip()
     result["_provided_keys"] = frozenset(provided_keys)
@@ -458,6 +533,8 @@ def parse_sections(content: str) -> list[dict[str, object]]:
             "password": "",
             "start_page": "/dashboard",
             "use_cookie": True,
+            "auth_provider": DEFAULT_AUTH_PROVIDER,
+            "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
             "body": body,
         }
         provided_keys: set[str] = set()
@@ -480,6 +557,19 @@ def parse_sections(content: str) -> list[dict[str, object]]:
             elif key == "use_cookie":
                 result["use_cookie"] = value.lower() == "true"
                 provided_keys.add("use_cookie")
+            elif key == "auth_provider":
+                if value not in AUTH_PROVIDERS:
+                    joined = ", ".join(AUTH_PROVIDERS)
+                    raise RuntimeError(
+                        f"Scenario frontmatter auth_provider must be one of: {joined}"
+                    )
+                result["auth_provider"] = value
+                provided_keys.add("auth_provider")
+            elif key == "auth_cookie_prefix":
+                if not value:
+                    raise RuntimeError("Scenario frontmatter auth_cookie_prefix must be non-empty")
+                result["auth_cookie_prefix"] = value
+                provided_keys.add("auth_cookie_prefix")
 
         result["_provided_keys"] = frozenset(provided_keys)
         sections.append(result)
@@ -626,7 +716,23 @@ def wait_for_target_ready(
     raise RuntimeError(f"Target at {base_url} not responding after {ready.timeout_seconds}s")
 
 
-def authenticate(base_url: str, email: str, password: str) -> AuthSession:
+def authenticate(
+    base_url: str,
+    email: str,
+    password: str,
+    *,
+    provider: str = DEFAULT_AUTH_PROVIDER,
+    cookie_prefix: str = DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+) -> AuthSession:
+    if provider == "nextauth":
+        return authenticate_nextauth(base_url, email, password)
+    if provider == "better-auth":
+        return authenticate_better_auth(base_url, email, password, cookie_prefix=cookie_prefix)
+    joined = ", ".join(AUTH_PROVIDERS)
+    raise RuntimeError(f"Unknown auth provider '{provider}'. Expected one of: {joined}")
+
+
+def authenticate_nextauth(base_url: str, email: str, password: str) -> AuthSession:
     jar = CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 
@@ -659,6 +765,42 @@ def authenticate(base_url: str, email: str, password: str) -> AuthSession:
             return AuthSession(cookie_name=cookie.name, session_token=cookie.value)
 
     raise RuntimeError(f"Authentication failed for {email} — no session token returned")
+
+
+def authenticate_better_auth(
+    base_url: str,
+    email: str,
+    password: str,
+    *,
+    cookie_prefix: str = DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+) -> AuthSession:
+    jar = CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
+    payload = json.dumps({"email": email, "password": password}).encode()
+    request = urllib.request.Request(
+        f"{base_url}/api/auth/sign-in/email",
+        data=payload,
+        method="POST",
+    )
+    request.add_header("Content-Type", "application/json")
+    request.add_header("Origin", base_url.rstrip("/"))
+
+    try:
+        opener.open(request, timeout=10)
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(
+            f"Authentication failed for {email} — Better Auth returned HTTP {exc.code}"
+        ) from exc
+
+    expected_suffix = f"{cookie_prefix}.session_token"
+    for cookie in jar:
+        if cookie.name == expected_suffix or cookie.name == f"__Secure-{expected_suffix}":
+            return AuthSession(cookie_name=cookie.name, session_token=cookie.value)
+
+    raise RuntimeError(
+        f"Authentication failed for {email} — no '{expected_suffix}' cookie returned"
+    )
 
 
 def browser_session_name(run_id: str, scenario_path: str, section_index: int | None = None) -> str:
@@ -709,6 +851,8 @@ def build_prompt_scenario(prompt: str) -> Scenario:
                 "password": "",
                 "start_page": "/dashboard",
                 "use_cookie": True,
+                "auth_provider": DEFAULT_AUTH_PROVIDER,
+                "auth_cookie_prefix": DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
                 "body": prompt.strip(),
                 "_provided_keys": frozenset(),
             }
@@ -1056,7 +1200,13 @@ def _run_single_section(
             if not section.email or not section.password:
                 raise RuntimeError("Scenario section requires email and password when use_cookie is true")
             log("authenticating...", prefix=section_prefix, color=color)
-            auth_session = authenticate(base_url, section.email, section.password)
+            auth_session = authenticate(
+                base_url,
+                section.email,
+                section.password,
+                provider=section.auth_provider,
+                cookie_prefix=section.auth_cookie_prefix,
+            )
             log(f"authenticated as {section.email}", prefix=section_prefix, color=color)
             prime_browser(
                 base_url,

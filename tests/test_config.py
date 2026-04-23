@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from qazy.config import get_target, load_config, resolve_target
+from qazy.config import build_default_target, get_target, load_config, resolve_target, write_example_config
 
 
 class ConfigTests(unittest.TestCase):
@@ -13,6 +13,40 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tempdir:
             with self.assertRaisesRegex(FileNotFoundError, "Create qazy.config.json"):
                 load_config(Path(tempdir))
+
+    def test_build_default_attached_target_uses_localhost_3000(self) -> None:
+        target = build_default_target()
+
+        self.assertEqual(target.name, "default")
+        self.assertEqual(target.mode, "attached")
+        self.assertEqual(target.base_url, "http://127.0.0.1:3000")
+        self.assertEqual(target.ready.path, "/")
+        self.assertEqual(target.ready.timeout_seconds, 60)
+        self.assertFalse(target.parallel_safe)
+
+    def test_build_default_managed_target_uses_local_port_template(self) -> None:
+        target = build_default_target(managed=True)
+
+        self.assertEqual(target.name, "default")
+        self.assertEqual(target.mode, "managed")
+        self.assertEqual(target.base_url, "http://127.0.0.1:{appPort}")
+        self.assertEqual(target.app_port, "auto")
+        self.assertEqual(target.env["PORT"], "{appPort}")
+        self.assertEqual(target.ready.path, "/")
+        self.assertEqual(target.ready.timeout_seconds, 60)
+
+    def test_write_example_config_creates_starter_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+
+            path = write_example_config(root)
+
+            self.assertEqual(path, (root / "qazy.config.example.json").resolve())
+            self.assertTrue(path.exists())
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["defaultTarget"], "local")
+            self.assertEqual(payload["targets"]["local"]["mode"], "managed")
+            self.assertEqual(payload["targets"]["local"]["ready"]["path"], "/")
 
     def test_load_config_mentions_repo_root_example_file_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -146,6 +180,87 @@ class ConfigTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(RuntimeError, "'resultsDir' must be a non-empty string"):
+                load_config(root)
+
+    def test_load_config_parses_auth_provider_scenario_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "scenarioDefaults": {
+                                    "authProvider": "better-auth",
+                                    "authCookiePrefix": "myapp",
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        target = get_target(config, None)
+        self.assertEqual(target.scenario_defaults.auth_provider, "better-auth")
+        self.assertEqual(target.scenario_defaults.auth_cookie_prefix, "myapp")
+
+    def test_load_config_rejects_unknown_auth_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "scenarioDefaults": {"authProvider": "made-up-auth"},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "authProvider"):
+                load_config(root)
+
+    def test_load_config_rejects_empty_auth_cookie_prefix(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "scenarioDefaults": {"authCookiePrefix": "   "},
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "authCookiePrefix"):
                 load_config(root)
 
     def test_load_config_rejects_invalid_target_scenario_defaults(self) -> None:

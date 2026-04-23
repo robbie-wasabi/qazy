@@ -80,6 +80,77 @@ server.serve_forever()
 """
 
 
+FAKE_PNPM_BETTER_AUTH = """#!/usr/bin/env python3
+import json
+import os
+import signal
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+port = int(os.environ["PORT"])
+expected_email = os.environ.get("QAZY_FAKE_AUTH_EMAIL", "tester@example.com")
+expected_password = os.environ.get("QAZY_FAKE_AUTH_PASSWORD", "tester123")
+session_token = os.environ.get("QAZY_FAKE_SESSION", "fake-session")
+cookie_prefix = os.environ.get("QAZY_FAKE_BA_COOKIE_PREFIX", "better-auth")
+secure_prefix = os.environ.get("QAZY_FAKE_BA_SECURE_PREFIX", "") == "1"
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, format, *args):
+        pass
+
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def do_POST(self):
+        if self.path != "/api/auth/sign-in/email":
+            self.send_response(404)
+            self.end_headers()
+            return
+        if self.headers.get("Content-Type", "").split(";")[0].strip() != "application/json":
+            self.send_response(415)
+            self.end_headers()
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(self.rfile.read(length).decode() or "{}")
+        except json.JSONDecodeError:
+            self.send_response(400)
+            self.end_headers()
+            return
+        email = payload.get("email", "")
+        password = payload.get("password", "")
+        if email == expected_email and password == expected_password:
+            cookie_name = f"{cookie_prefix}.session_token"
+            if secure_prefix:
+                cookie_name = f"__Secure-{cookie_name}"
+            body = json.dumps({"user": {"email": email}}).encode()
+            self.send_response(200)
+            self.send_header(
+                "Set-Cookie",
+                f"{cookie_name}={session_token}; Path=/; HttpOnly; SameSite=Lax",
+            )
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(401)
+        self.end_headers()
+
+server = HTTPServer(("127.0.0.1", port), Handler)
+
+def shutdown(*_args):
+    server.shutdown()
+
+signal.signal(signal.SIGINT, shutdown)
+signal.signal(signal.SIGTERM, shutdown)
+print(f"http://localhost:{port}", flush=True)
+server.serve_forever()
+"""
+
+
 FAKE_AGENT_BROWSER = """#!/usr/bin/env python3
 import os
 import sys
@@ -212,6 +283,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.bin_dir = self.root / "bin"
         self.bin_dir.mkdir()
         make_executable(self.bin_dir / "pnpm", FAKE_PNPM)
+        make_executable(self.bin_dir / "pnpm-better-auth", FAKE_PNPM_BETTER_AUTH)
         make_executable(self.bin_dir / "agent-browser", FAKE_AGENT_BROWSER)
         make_executable(self.bin_dir / "claude", FAKE_CLAUDE)
         make_executable(self.bin_dir / "codex", FAKE_CODEX)
@@ -246,6 +318,12 @@ class QazyCliFunctionalTests(unittest.TestCase):
                 }
             },
         }
+
+    def better_auth_config_payload(self) -> dict[str, object]:
+        payload = self.default_config_payload()
+        payload["targets"]["local-mem"]["devCommand"] = "pnpm-better-auth dev:mem"
+        payload["targets"]["local-mem"]["scenarioDefaults"] = {"authProvider": "better-auth"}
+        return payload
 
     def write_scenario(self, relative_path: str, content: str) -> Path:
         path = self.root / "user-scenarios" / relative_path
@@ -989,7 +1067,9 @@ class QazyCliFunctionalTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
+        self.assertIn("--base-url BASE_URL", output)
         self.assertIn("--screenshot-strategy", output)
+        self.assertIn("No-config mode:", output)
         self.assertIn("Minimal Scenario File:", output)
         self.assertIn("Multi-section Scenarios:", output)
         self.assertIn("target.scenarioDefaults can fill missing values", output)
@@ -1016,6 +1096,21 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn("Unknown help topic: wat", output)
         self.assertIn("Available topics:", output)
         self.assertIn("rename-scenarios", output)
+
+    def test_init_command_writes_example_config(self) -> None:
+        example_path = self.root / "qazy.config.example.json"
+        self.assertFalse(example_path.exists())
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["init", "--project-root", str(self.root)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(example_path.exists())
+        payload = json.loads(example_path.read_text(encoding="utf-8"))
+        self.assertEqual(payload["defaultTarget"], "local")
+        self.assertEqual(payload["targets"]["local"]["mode"], "managed")
+        self.assertIn(str(example_path), stdout.getvalue())
 
     def test_run_multi_section_shared_server_all_pass(self) -> None:
         self.write_scenario(
@@ -1219,7 +1314,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "does not support parallel"):
             main(["batch", "--project-root", str(self.root), "--parallel", "user-scenarios"])
 
-    def test_run_command_requires_config_file(self) -> None:
+    def test_run_command_without_config_uses_base_url_fallback(self) -> None:
         self.write_scenario(
             "no-config.scenario.md",
             """
@@ -1231,13 +1326,71 @@ class QazyCliFunctionalTests(unittest.TestCase):
             ---
 
             ## list
-            - [ ] config is required
+            - [ ] no config fallback works
+            """,
+        )
+        (self.root / "qazy.config.json").unlink()
+        port = self.free_port()
+        self.start_attached_server(port)
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "run",
+                    "--project-root",
+                    str(self.root),
+                    "--base-url",
+                    f"http://localhost:{port}",
+                    "user-scenarios/no-config",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertNotIn("starting target", output)
+        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--no-config.md"
+        content = result_file.read_text(encoding="utf-8")
+        self.assertIn("**Target**: default (attached)", content)
+        self.assertIn(f"**Server**: http://localhost:{port}", content)
+
+    def test_run_command_without_config_uses_default_managed_target(self) -> None:
+        self.write_scenario(
+            "no-config-managed.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /login
+            use_cookie: false
+            ---
+
+            ## list
+            - [ ] managed fallback works
             """,
         )
         (self.root / "qazy.config.json").unlink()
 
-        with self.assertRaisesRegex(FileNotFoundError, "Create qazy.config.json"):
-            main(["run", "--project-root", str(self.root), "user-scenarios/no-config"])
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "run",
+                    "--project-root",
+                    str(self.root),
+                    "--dev-command",
+                    "pnpm dev:mem",
+                    "user-scenarios/no-config-managed",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("starting target 'default'", output)
+        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--no-config-managed.md"
+        content = result_file.read_text(encoding="utf-8")
+        self.assertIn("**Target**: default (managed)", content)
+        self.assertIn("**Server**: http://127.0.0.1:", content)
 
 
 class QazyParseSectionsTests(unittest.TestCase):
@@ -1406,3 +1559,182 @@ class QazyRunnerHelpersTests(unittest.TestCase):
         )
         self.assertLessEqual(len(name), 60)
         self.assertTrue(name.startswith("qz-"))
+
+
+AUTH_PROVIDER_MATRIX = (
+    ("nextauth", "default_config_payload", "next-auth.session-token"),
+    ("better-auth", "better_auth_config_payload", "better-auth.session_token"),
+)
+
+
+class AuthProvidersTests(QazyCliFunctionalTests):
+    """Cross-provider auth coverage.
+
+    Matrixes the sign-in flow across every supported provider, then adds
+    Better Auth-specific edge-case tests. Inherits setUp from
+    QazyCliFunctionalTests so each subTest spawns its own fake app on a fresh
+    port — subTests stay race-safe.
+    """
+
+    def test_authenticates_and_sets_cookie_for_each_provider(self) -> None:
+        for provider, config_fn_name, expected_cookie in AUTH_PROVIDER_MATRIX:
+            with self.subTest(provider=provider):
+                browser_log = self.root / f"agent-browser-{provider}.log"
+                with patch.dict(
+                    os.environ,
+                    {"QAZY_FAKE_AGENT_BROWSER_LOG": str(browser_log)},
+                    clear=False,
+                ):
+                    self.write_config(getattr(self, config_fn_name)())
+                    self.write_scenario(
+                        f"auth-{provider}.scenario.md",
+                        f"""
+                        ---
+                        email: tester@example.com
+                        password: tester123
+                        start_page: /dashboard
+                        use_cookie: true
+                        auth_provider: {provider}
+                        ---
+
+                        # Auth Matrix {provider}
+
+                        ## list
+                        - [ ] dashboard loads
+                        """,
+                    )
+
+                    stdout = io.StringIO()
+                    with contextlib.redirect_stdout(stdout):
+                        exit_code = main(
+                            [
+                                "run",
+                                "--project-root",
+                                str(self.root),
+                                f"user-scenarios/auth-{provider}",
+                            ]
+                        )
+
+                    self.assertEqual(exit_code, 0)
+                    commands = browser_log.read_text(encoding="utf-8")
+                    self.assertIn(f"cookies set {expected_cookie} fake-session", commands)
+
+    def test_better_auth_honors_custom_cookie_prefix(self) -> None:
+        env_patch = patch.dict(os.environ, {"QAZY_FAKE_BA_COOKIE_PREFIX": "myapp"}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        config = self.better_auth_config_payload()
+        config["targets"]["local-mem"]["scenarioDefaults"] = {
+            "authProvider": "better-auth",
+            "authCookiePrefix": "myapp",
+        }
+        self.write_config(config)
+        self.write_scenario(
+            "ba-prefix.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /dashboard
+            use_cookie: true
+            ---
+
+            ## list
+            - [ ] custom prefix cookie is set
+            """,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["run", "--project-root", str(self.root), "user-scenarios/ba-prefix"])
+
+        self.assertEqual(exit_code, 0)
+        commands = self.browser_log.read_text(encoding="utf-8")
+        self.assertIn("cookies set myapp.session_token fake-session", commands)
+
+    def test_better_auth_matches_secure_prefixed_cookie(self) -> None:
+        env_patch = patch.dict(os.environ, {"QAZY_FAKE_BA_SECURE_PREFIX": "1"}, clear=False)
+        env_patch.start()
+        self.addCleanup(env_patch.stop)
+        self.write_config(self.better_auth_config_payload())
+        self.write_scenario(
+            "ba-secure.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /dashboard
+            use_cookie: true
+            auth_provider: better-auth
+            ---
+
+            ## list
+            - [ ] __Secure- prefixed cookie is picked up
+            """,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["run", "--project-root", str(self.root), "user-scenarios/ba-secure"])
+
+        self.assertEqual(exit_code, 0)
+        commands = self.browser_log.read_text(encoding="utf-8")
+        self.assertIn(
+            "cookies set __Secure-better-auth.session_token fake-session",
+            commands,
+        )
+
+    def test_better_auth_cli_override_beats_nextauth_default(self) -> None:
+        self.write_config(self.better_auth_config_payload())
+        self.write_scenario(
+            "ba-cli.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /dashboard
+            use_cookie: true
+            ---
+
+            ## list
+            - [ ] --auth-provider beats frontmatter default
+            """,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(
+                [
+                    "run",
+                    "--project-root",
+                    str(self.root),
+                    "--auth-provider",
+                    "better-auth",
+                    "user-scenarios/ba-cli",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        commands = self.browser_log.read_text(encoding="utf-8")
+        self.assertIn("cookies set better-auth.session_token fake-session", commands)
+        self.assertNotIn("next-auth.session-token", commands)
+
+    def test_invalid_auth_provider_in_frontmatter_is_rejected(self) -> None:
+        self.write_scenario(
+            "bad-provider.scenario.md",
+            """
+            ---
+            email: tester@example.com
+            password: tester123
+            start_page: /dashboard
+            use_cookie: true
+            auth_provider: made-up-auth
+            ---
+
+            ## list
+            - [ ] never runs
+            """,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "auth_provider must be one of"):
+            main(["run", "--project-root", str(self.root), "user-scenarios/bad-provider"])

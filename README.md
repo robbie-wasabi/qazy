@@ -12,11 +12,24 @@ Qazy expects:
 
 - `agent-browser` on `PATH`
 - at least one runtime CLI on `PATH`: `claude`, `codex`, or `opencode`
-- a `qazy.config.json` in the app workspace you want to test
+- either a `qazy.config.json` or enough CLI information to use the built-in defaults
 
 ## Quick Start
 
-Create `qazy.config.json` in the target project:
+Fastest path, with no config file at all:
+
+```bash
+qazy user-scenarios/login --base-url http://127.0.0.1:3000
+qazy user-scenarios/login --dev-command "pnpm dev"
+qazy init
+```
+
+No-config defaults are:
+
+- attached target at `http://127.0.0.1:3000`
+- or, if `--dev-command` is supplied, a managed target at `http://127.0.0.1:{appPort}` with `PORT={appPort}`
+
+For repeated use, named environments, and checked-in team defaults, create `qazy.config.json` in the target project:
 
 ```json
 {
@@ -92,6 +105,7 @@ Useful options for runs:
 - `--project-root` to point Qazy at another workspace
 - `--config-file` to use a non-default config path
 - `--target` to pick a named target
+- `--base-url` to run without `qazy.config.json` against an existing app URL
 - `--runtime` to choose `claude`, `codex`, or `opencode`
 - `--model` and `--reasoning-effort` to forward runtime-specific tuning
 - `--email`, `--password`, `--start-page`, `--use-cookie`, `--no-use-cookie` to override scenario values
@@ -105,6 +119,7 @@ Other commands:
 ```bash
 qazy tokens
 qazy tokens .qazy/logs/claude-login.log
+qazy init
 qazy rename-scenarios --write
 qazy runtimes
 qazy runtimes --smoke
@@ -117,6 +132,7 @@ qazy help auth
 What they do:
 
 - `qazy tokens` summarizes usage from runtime log files
+- `qazy init` writes a starter `qazy.config.example.json`
 - `qazy rename-scenarios` migrates legacy scenario layouts to `*.scenario.md`
 - `qazy runtimes` checks which runtime CLIs are available
 - `qazy runtimes --smoke` sends a trivial prompt through each installed runtime
@@ -124,7 +140,19 @@ What they do:
 
 ## Config
 
-Qazy looks for `qazy.config.json` in `--project-root`. If that file is missing and `qazy.config.example.json` exists, Qazy tells you to copy it.
+`qazy.config.json` is optional. Qazy looks for it in `--project-root`, but if it is missing Qazy can still run with a built-in default target:
+
+- no config and no target flags: attached `http://127.0.0.1:3000`
+- no config and `--base-url URL`: attached `URL`
+- no config and `--dev-command "..."`: managed `http://127.0.0.1:{appPort}` with `PORT={appPort}`
+
+If `qazy.config.json` is absent and `qazy.config.example.json` exists, Qazy no longer requires you to copy it before running. The config file is still the recommended way to store shared target definitions.
+
+You can scaffold a starter template with:
+
+```bash
+qazy init
+```
 
 Top-level fields:
 
@@ -164,6 +192,8 @@ Frontmatter fields:
 - `password`
 - `start_page`
 - `use_cookie`
+- `auth_provider` — `nextauth` (default) or `better-auth`
+- `auth_cookie_prefix` — Better Auth cookie prefix override (default `better-auth`)
 
 Single-section scenarios are the common case. Multi-section scenarios work by repeating the frontmatter block:
 
@@ -204,16 +234,17 @@ Built-in defaults are `start_page: /dashboard` and `use_cookie: true`. Credentia
 
 ## Authentication
 
-Qazy has one built-in auto-auth flow, controlled by `use_cookie`.
+Qazy has built-in credentials-cookie login, controlled by `use_cookie` plus `auth_provider`.
 
-- `use_cookie: true`: Qazy performs a NextAuth credentials-cookie login before handing control to the runtime. It requests `/api/auth/csrf`, posts to `/api/auth/callback/credentials`, captures the returned session cookie, injects it into `agent-browser`, and opens `start_page`.
+- `use_cookie: true`, `auth_provider: nextauth` (default): Qazy requests `/api/auth/csrf`, posts form-encoded credentials to `/api/auth/callback/credentials`, captures the `next-auth.session-token` cookie, and injects it into `agent-browser`.
+- `use_cookie: true`, `auth_provider: better-auth`: Qazy posts JSON credentials to `/api/auth/sign-in/email` with a matching `Origin` header, captures the `better-auth.session_token` cookie (or `__Secure-better-auth.session_token` on HTTPS), and injects it into `agent-browser`. Override the cookie prefix via `auth_cookie_prefix` if your server customizes Better Auth's `advanced.cookiePrefix`.
 - `use_cookie: false`: Qazy does no pre-authentication. The runtime logs in manually in the browser.
 
-Credential sources, in precedence order:
+Credential and provider sources, in precedence order:
 
-1. CLI overrides such as `--email` and `--password`
+1. CLI overrides: `--email`, `--password`, `--auth-provider`, `--auth-cookie-prefix`
 2. Scenario frontmatter
-3. Target `scenarioDefaults`
+3. Target `scenarioDefaults` (`email`, `password`, `authProvider`, `authCookiePrefix`, …)
 
 Custom auth flows still work, but they are runtime-driven browser flows rather than built-in Qazy auth. That includes SSO, OAuth redirects, magic links, MFA, and custom login forms.
 
@@ -276,7 +307,7 @@ Each example includes a lightweight HTML app, a `qazy.config.json`, and scenario
 
 ## Limitations
 
-- Built-in auto-auth only supports NextAuth credentials-cookie login
+- Built-in auto-auth supports NextAuth and Better Auth credentials-cookie login only
 - PASS/FAIL is inferred from runtime output parsed by Qazy
 - Ready checks are simple HTTP probes
 - Prompt mode is useful for exploration but less repeatable than checked-in scenarios

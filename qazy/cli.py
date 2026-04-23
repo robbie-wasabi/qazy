@@ -9,7 +9,15 @@ import sys
 import textwrap
 from pathlib import Path
 
-from .config import get_target, load_config
+from .config import (
+    AUTH_PROVIDERS,
+    DEFAULT_TARGET_NAME,
+    TargetDefinition,
+    build_default_target,
+    get_target,
+    load_config,
+    write_example_config,
+)
 from .reporting import UsageTotals, analyze_log, format_usage
 from .runner import ScenarioOverrides, rename_scenarios, run_batch, run_prompt, run_scenario, workspace_from_root
 from .runtimes import list_runtimes, probe_runtime
@@ -19,6 +27,7 @@ LEGACY_SCENARIO_COMMANDS = {"run", "batch"}
 HELP_TOPICS = {
     "run",
     "batch",
+    "init",
     "scenario",
     "prompt",
     "tokens",
@@ -43,18 +52,21 @@ def build_main_help() -> str:
         Usage:
           qazy <scenario-path|dir|glob> [options]
           qazy -p "ad hoc prompt" [options]
+          qazy init [options]
           qazy tokens [logs...] [options]
           qazy rename-scenarios [options]
           qazy runtimes [options]
           qazy help [command]
 
         What Qazy Needs:
-          - qazy.config.json in the workspace under test
+          - qazy.config.json, or use the built-in no-config target defaults
           - agent-browser on PATH
           - a runtime CLI installed ({runtimes})
 
         Core Flows:
+          qazy init
           qazy user-scenarios/login
+          qazy user-scenarios/login --base-url http://127.0.0.1:3000
           qazy "user-scenarios/**/*.scenario.md" --parallel
           qazy -p "test login flow for student" --start-page /login --no-use-cookie
           qazy tokens
@@ -62,10 +74,13 @@ def build_main_help() -> str:
 
         Key Run Options:
           --target NAME                  Pick a target from qazy.config.json
+          --base-url URL                 Use an attached target without qazy.config.json
           --runtime NAME                 Runtime CLI to use
           --email/--password             Override scenario credentials
           --start-page                   Override scenario start_page
           --use-cookie/--no-use-cookie   Control built-in auth behavior
+          --auth-provider                nextauth | better-auth
+          --auth-cookie-prefix           Better Auth cookie prefix override
           --headed/--headless            Control browser visibility
           --screenshot-strategy          none | error | single | checkpoints
           --results-dir / --logs-dir     Override output locations
@@ -88,6 +103,8 @@ def build_main_help() -> str:
         Targets:
           managed   start and stop a local process from devCommand
           attached  run against an existing baseUrl without starting a server
+          no-config default attached target is http://127.0.0.1:3000
+          no-config --dev-command target starts locally with PORT={{appPort}}
 
         Scenario Sources:
           file      single scenario run
@@ -95,12 +112,13 @@ def build_main_help() -> str:
           --prompt  ad hoc single run without a scenario file
 
         Scenario Fields:
-          email, password, start_page, use_cookie
+          email, password, start_page, use_cookie, auth_provider, auth_cookie_prefix
           CLI overrides win; target.scenarioDefaults can fill missing values.
 
         Authentication:
-          use_cookie=true   built-in NextAuth credentials flow:
-                            GET /api/auth/csrf then POST /api/auth/callback/credentials
+          use_cookie=true   built-in credentials-cookie login; pick with auth_provider
+                            - nextauth (default):   GET /api/auth/csrf then POST /api/auth/callback/credentials
+                            - better-auth:          POST /api/auth/sign-in/email (JSON)
           use_cookie=false  runtime logs in manually in the browser
 
         Outputs:
@@ -109,12 +127,13 @@ def build_main_help() -> str:
           exit code          0 on pass, 1 on fail/error
 
         Limitations:
-          - built-in auto-auth only supports NextAuth credentials-cookie login
+          - built-in auto-auth supports NextAuth and Better Auth credentials-cookie login only
           - PASS/FAIL comes from runtime output parsed by Qazy, not deterministic DOM assertions
           - managed target readiness is a simple HTTP probe
           - prompt mode is best for exploration; checked-in scenario files are more repeatable
 
         Help Topics:
+          qazy help init
           qazy help run
           qazy help config
           qazy help auth
@@ -131,6 +150,7 @@ def build_scenario_help_epilog() -> str:
         """\
         Examples:
           qazy user-scenarios/login
+          qazy user-scenarios/login --base-url http://127.0.0.1:3000
           qazy "user-scenarios/**/*.scenario.md" --parallel
           qazy -p "test login flow for student" --start-page /login --no-use-cookie
           qazy user-scenarios/login --target staging --runtime codex
@@ -141,9 +161,14 @@ def build_scenario_help_epilog() -> str:
           - --prompt: ad hoc single run with no scenario file
 
         Scenario Fields:
-          email, password, start_page, use_cookie
+          email, password, start_page, use_cookie, auth_provider, auth_cookie_prefix
           CLI overrides apply to every section in a multi-section scenario file.
           target.scenarioDefaults can fill missing values before CLI overrides are applied.
+
+        No-config mode:
+          - with no qazy.config.json, Qazy defaults to attached http://127.0.0.1:3000
+          - --base-url points Qazy at another existing app
+          - --dev-command starts a managed app and uses http://127.0.0.1:{appPort}
 
         Minimal Scenario File:
           ---
@@ -164,7 +189,7 @@ def build_scenario_help_epilog() -> str:
           Qazy runs those sections in order against one shared target lifecycle.
 
         Authentication:
-          use_cookie=true   built-in NextAuth credentials login
+          use_cookie=true   built-in credentials-cookie login (nextauth | better-auth)
           use_cookie=false  runtime logs in manually in the browser
 
         Outputs:
@@ -189,6 +214,21 @@ def build_tokens_help_epilog() -> str:
         Notes:
           - Reads runtime logs, not result markdown files.
           - Skips server-*.log files by default.
+        """
+    ).rstrip()
+
+
+def build_init_help_epilog() -> str:
+    return textwrap.dedent(
+        """\
+        Examples:
+          qazy init
+          qazy init --force
+          qazy init --output qazy.config.json
+
+        Notes:
+          - Writes qazy.config.example.json by default.
+          - Intended as a starting point for editing, not a repo-specific final config.
         """
     ).rstrip()
 
@@ -228,7 +268,8 @@ def build_config_help() -> str:
         ================
 
         Qazy looks for qazy.config.json in the project root by default.
-        You can override that with --config-file.
+        You can override that with --config-file. If no config exists, Qazy can still run
+        with its built-in default target behavior.
 
         Root Fields:
           version         config schema version; currently 1
@@ -245,7 +286,7 @@ def build_config_help() -> str:
           ready           HTTP readiness probe; default path "/" timeout 60s
           parallelSafe    required for batch --parallel
           scenarioDefaults
-                          default email/password/startPage/useCookie values
+                          default email/password/startPage/useCookie/authProvider/authCookiePrefix values
 
         Minimal Managed Target:
           {
@@ -275,6 +316,8 @@ def build_config_help() -> str:
           - resultsDir is resolved relative to qazy.config.json when relative
           - logs default to .qazy/logs/, with legacy qazy/logs/ still honored if present
           - ready.type currently only supports "http"
+          - without qazy.config.json, Qazy defaults to attached http://127.0.0.1:3000
+          - without qazy.config.json, --dev-command creates a managed local target
         """
     ).rstrip()
 
@@ -285,29 +328,37 @@ def build_auth_help() -> str:
         qazy help auth
         ==============
 
-        Qazy has one built-in auto-auth flow, controlled by use_cookie.
+        Qazy has built-in credentials-cookie login controlled by use_cookie and
+        auth_provider.
 
-        use_cookie=true
-          Qazy performs a NextAuth credentials-cookie login before handing control
-          to the runtime:
-            1. GET /api/auth/csrf
-            2. POST /api/auth/callback/credentials
-            3. capture the returned session cookie
-            4. inject that cookie into agent-browser
-            5. open start_page
+        use_cookie=true, auth_provider=nextauth (default)
+          1. GET /api/auth/csrf
+          2. POST /api/auth/callback/credentials  (form-encoded)
+          3. capture the next-auth session cookie
+          4. inject that cookie into agent-browser
+          5. open start_page
+
+        use_cookie=true, auth_provider=better-auth
+          1. POST /api/auth/sign-in/email  (JSON body, Origin header)
+          2. capture better-auth.session_token (or __Secure-…) cookie
+          3. inject that cookie into agent-browser
+          4. open start_page
 
         use_cookie=false
           Qazy does no pre-authentication. The runtime must log in manually in the browser.
 
         Credential Sources:
-          - scenario frontmatter
+          - scenario frontmatter: email, password, auth_provider, auth_cookie_prefix
           - target.scenarioDefaults
           - CLI overrides: --email --password --start-page --use-cookie/--no-use-cookie
+                           --auth-provider --auth-cookie-prefix
 
         Important Limits:
-          - built-in auth is only for NextAuth credentials-cookie login
+          - built-in auth only covers NextAuth and Better Auth credentials-cookie login
           - SSO, OAuth, magic links, MFA, and custom login flows must be browser-driven
           - email/password are only required when use_cookie resolves to true
+          - auth_cookie_prefix is only used by better-auth (matches Better Auth's
+            advanced.cookiePrefix; defaults to "better-auth")
         """
     ).rstrip()
 
@@ -322,7 +373,7 @@ def build_limitations_help() -> str:
 
         Current limitations:
           - PASS/FAIL is inferred from runtime output parsed by Qazy
-          - built-in auto-auth only supports NextAuth credentials-cookie login
+          - built-in auto-auth supports NextAuth and Better Auth credentials-cookie login only
           - readiness checks are simple HTTP probes
           - prompt mode is convenient but less repeatable than checked-in scenario files
           - runtime quality depends on the installed agent CLI and its browser behavior
@@ -346,6 +397,9 @@ def print_main_help() -> None:
 
 
 def print_help_topic(topic: str) -> int:
+    if topic == "init":
+        build_init_parser().print_help()
+        return 0
     if topic in {"run", "batch"}:
         build_scenario_parser(prog=f"qazy {topic}").print_help()
         return 0
@@ -408,6 +462,19 @@ def build_scenario_parser(*, prog: str = "qazy") -> argparse.ArgumentParser:
     return parser
 
 
+def build_init_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="qazy init",
+        description="Write a starter Qazy config file for the current workspace.",
+        epilog=build_init_help_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root")
+    parser.add_argument("--output", type=Path, help="Output path, relative to --project-root by default")
+    parser.add_argument("--force", action="store_true", help="Overwrite the output file if it already exists")
+    return parser
+
+
 def build_tokens_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qazy tokens",
@@ -453,6 +520,7 @@ def add_run_batch_workspace_args(parser: argparse.ArgumentParser) -> None:
 def add_target_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--target", dest="target_name", help="Named target from qazy.config.json")
     parser.add_argument("--config-file", type=Path, help="Path to a qazy.config.json file")
+    parser.add_argument("--base-url", help="Use an attached target URL when qazy.config.json is absent")
 
 
 def add_logs_workspace_args(parser: argparse.ArgumentParser) -> None:
@@ -511,6 +579,19 @@ def add_frontmatter_override_args(parser: argparse.ArgumentParser) -> None:
         action="store_false",
         help="Override scenario frontmatter use_cookie to false",
     )
+    parser.add_argument(
+        "--auth-provider",
+        dest="auth_provider",
+        choices=list(AUTH_PROVIDERS),
+        default=None,
+        help="Override scenario frontmatter auth_provider",
+    )
+    parser.add_argument(
+        "--auth-cookie-prefix",
+        dest="auth_cookie_prefix",
+        default=None,
+        help="Override Better Auth cookie prefix (default: better-auth)",
+    )
 
 
 def workspace_from_args(args: argparse.Namespace, *, config_results_dir: Path | None = None):
@@ -528,6 +609,8 @@ def scenario_overrides_from_args(args: argparse.Namespace) -> ScenarioOverrides 
         password=getattr(args, "password", None),
         start_page=getattr(args, "start_page", None),
         use_cookie=getattr(args, "use_cookie", None),
+        auth_provider=getattr(args, "auth_provider", None),
+        auth_cookie_prefix=getattr(args, "auth_cookie_prefix", None),
     )
     if not overrides.has_overrides():
         return None
@@ -540,6 +623,23 @@ def resolve_cli_target(project_root: Path, target: str) -> bool:
     candidate = Path(target).expanduser()
     resolved = candidate.resolve() if candidate.is_absolute() else (project_root / candidate).resolve()
     return resolved.is_dir()
+
+
+def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, TargetDefinition]:
+    try:
+        config = load_config(args.project_root, config_file=args.config_file)
+    except FileNotFoundError:
+        if args.config_file is not None:
+            raise
+        if args.target_name not in {None, DEFAULT_TARGET_NAME}:
+            raise RuntimeError("--target requires qazy.config.json when selecting a named target")
+        if args.base_url is not None and args.dev_command is not None:
+            raise RuntimeError("--base-url and --dev-command cannot be combined without qazy.config.json")
+        return None, build_default_target(base_url=args.base_url, managed=args.dev_command is not None)
+
+    if args.base_url is not None:
+        raise RuntimeError("--base-url is only supported when qazy.config.json is absent")
+    return config.results_dir, get_target(config, args.target_name)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -591,6 +691,12 @@ def main(argv: list[str] | None = None) -> int:
             print("=" * 50)
             print("TOTAL:")
             print(format_usage(grand_totals))
+        return 0
+
+    if command == "init":
+        args = build_init_parser().parse_args(raw_argv[1:])
+        path = write_example_config(args.project_root, output=args.output, force=args.force)
+        print(path)
         return 0
 
     if command == "rename-scenarios":
@@ -658,9 +764,8 @@ def main(argv: list[str] | None = None) -> int:
     if not is_batch and args.max_workers is not None:
         parser.error("--max-workers requires a directory or glob target")
 
-    config = load_config(args.project_root, config_file=args.config_file)
-    workspace = workspace_from_args(args, config_results_dir=config.results_dir)
-    target = get_target(config, args.target_name)
+    config_results_dir, target = resolve_run_target(args)
+    workspace = workspace_from_args(args, config_results_dir=config_results_dir)
     scenario_overrides = scenario_overrides_from_args(args)
 
     if args.prompt is not None:

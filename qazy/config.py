@@ -20,17 +20,31 @@ class ReadyCheck:
     timeout_seconds: int
 
 
+AUTH_PROVIDERS = ("nextauth", "better-auth")
+DEFAULT_AUTH_PROVIDER = "nextauth"
+DEFAULT_BETTER_AUTH_COOKIE_PREFIX = "better-auth"
+
+
 @dataclass(frozen=True)
 class ScenarioDefaults:
     email: str | None = None
     password: str | None = None
     start_page: str | None = None
     use_cookie: bool | None = None
+    auth_provider: str | None = None
+    auth_cookie_prefix: str | None = None
 
     def has_values(self) -> bool:
         return any(
             value is not None
-            for value in (self.email, self.password, self.start_page, self.use_cookie)
+            for value in (
+                self.email,
+                self.password,
+                self.start_page,
+                self.use_cookie,
+                self.auth_provider,
+                self.auth_cookie_prefix,
+            )
         )
 
 
@@ -68,6 +82,93 @@ class ResolvedTarget:
     ready: ReadyCheck
     parallel_safe: bool
     scenario_defaults: ScenarioDefaults
+
+
+DEFAULT_TARGET_NAME = "default"
+DEFAULT_ATTACHED_BASE_URL = "http://127.0.0.1:3000"
+DEFAULT_MANAGED_BASE_URL = "http://127.0.0.1:{appPort}"
+DEFAULT_READY_CHECK = ReadyCheck(type="http", path="/", timeout_seconds=60)
+
+
+def build_default_target(*, base_url: str | None = None, managed: bool = False) -> TargetDefinition:
+    if managed:
+        return TargetDefinition(
+            name=DEFAULT_TARGET_NAME,
+            mode="managed",
+            base_url=base_url or DEFAULT_MANAGED_BASE_URL,
+            dev_command=None,
+            env={"PORT": "{appPort}"} if base_url is None else {},
+            app_port="auto" if base_url is None else None,
+            mongo_port=None,
+            ready=DEFAULT_READY_CHECK,
+            parallel_safe=False,
+            scenario_defaults=ScenarioDefaults(),
+        )
+
+    return TargetDefinition(
+        name=DEFAULT_TARGET_NAME,
+        mode="attached",
+        base_url=base_url or DEFAULT_ATTACHED_BASE_URL,
+        dev_command=None,
+        env={},
+        app_port=None,
+        mongo_port=None,
+        ready=DEFAULT_READY_CHECK,
+        parallel_safe=False,
+        scenario_defaults=ScenarioDefaults(),
+    )
+
+
+def build_example_config_payload() -> dict[str, object]:
+    return {
+        "version": 1,
+        "defaultTarget": "local",
+        "targets": {
+            "local": {
+                "mode": "managed",
+                "baseUrl": DEFAULT_MANAGED_BASE_URL,
+                "devCommand": "pnpm dev",
+                "ports": {
+                    "appPort": "auto",
+                },
+                "env": {
+                    "PORT": "{appPort}",
+                },
+                "ready": {
+                    "type": "http",
+                    "path": DEFAULT_READY_CHECK.path,
+                    "timeoutSeconds": DEFAULT_READY_CHECK.timeout_seconds,
+                },
+                "parallelSafe": False,
+                "scenarioDefaults": {
+                    "startPage": "/login",
+                    "useCookie": False,
+                },
+            }
+        },
+    }
+
+
+def write_example_config(
+    project_root: Path,
+    *,
+    output: Path | None = None,
+    force: bool = False,
+) -> Path:
+    root = project_root.resolve()
+    path = output or Path("qazy.config.example.json")
+    resolved = path.expanduser()
+    if not resolved.is_absolute():
+        resolved = (root / resolved).resolve()
+    else:
+        resolved = resolved.resolve()
+
+    if resolved.exists() and not force:
+        raise FileExistsError(f"Refusing to overwrite existing file: {resolved}")
+
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(f"{json.dumps(build_example_config_payload(), indent=2)}\n", encoding="utf-8")
+    return resolved
 
 
 def find_config_file(project_root: Path, explicit_path: Path | None = None) -> Path:
@@ -297,7 +398,7 @@ def parse_scenario_defaults(config_path: Path, target_name: str, payload: object
             f"Invalid Qazy config at {config_path}: target '{target_name}' scenarioDefaults must be an object"
         )
 
-    allowed_keys = {"email", "password", "startPage", "useCookie"}
+    allowed_keys = {"email", "password", "startPage", "useCookie", "authProvider", "authCookiePrefix"}
     unknown_keys = sorted(set(payload) - allowed_keys)
     if unknown_keys:
         joined = ", ".join(unknown_keys)
@@ -334,17 +435,38 @@ def parse_scenario_defaults(config_path: Path, target_name: str, payload: object
             "must be true or false"
         )
 
+    auth_provider = payload.get("authProvider")
+    if auth_provider is not None and (
+        not isinstance(auth_provider, str) or auth_provider not in AUTH_PROVIDERS
+    ):
+        joined = ", ".join(AUTH_PROVIDERS)
+        raise RuntimeError(
+            f"Invalid Qazy config at {config_path}: target '{target_name}' scenarioDefaults.authProvider "
+            f"must be one of: {joined}"
+        )
+
+    auth_cookie_prefix = payload.get("authCookiePrefix")
+    if auth_cookie_prefix is not None and (
+        not isinstance(auth_cookie_prefix, str) or not auth_cookie_prefix.strip()
+    ):
+        raise RuntimeError(
+            f"Invalid Qazy config at {config_path}: target '{target_name}' scenarioDefaults.authCookiePrefix "
+            "must be a non-empty string"
+        )
+
     return ScenarioDefaults(
         email=email,
         password=password,
         start_page=start_page,
         use_cookie=use_cookie,
+        auth_provider=auth_provider,
+        auth_cookie_prefix=auth_cookie_prefix,
     )
 
 
 def parse_ready(config_path: Path, target_name: str, payload: object) -> ReadyCheck:
     if payload is None:
-        return ReadyCheck(type="http", path="/api/auth/csrf", timeout_seconds=120)
+        return ReadyCheck(type="http", path="/", timeout_seconds=120)
     if not isinstance(payload, dict):
         raise RuntimeError(
             f"Invalid Qazy config at {config_path}: target '{target_name}' ready must be an object"
@@ -356,7 +478,7 @@ def parse_ready(config_path: Path, target_name: str, payload: object) -> ReadyCh
             f"Invalid Qazy config at {config_path}: target '{target_name}' ready.type must be 'http'"
         )
 
-    path = payload.get("path", "/api/auth/csrf")
+    path = payload.get("path", "/")
     if not isinstance(path, str) or not path:
         raise RuntimeError(
             f"Invalid Qazy config at {config_path}: target '{target_name}' ready.path must be a string"
