@@ -67,6 +67,9 @@ class RuntimeAdapter:
     def help_command(self) -> list[str]:
         return [self.executable, "--help"]
 
+    def effective_model(self, model: str | None) -> str | None:
+        return model
+
     def consume_line(self, line: str, *, state: RuntimeState, cwd: Path) -> list[str]:
         return [line] if line.strip() else []
 
@@ -90,6 +93,7 @@ class ClaudeRuntime(RuntimeAdapter):
             "--output-format",
             "stream-json",
             "--no-session-persistence",
+            "--strict-mcp-config",
             "--disallowedTools",
             "Read Write Grep Glob Edit",
             "--permission-mode",
@@ -168,6 +172,9 @@ class CodexRuntime(RuntimeAdapter):
     executable = "codex"
     default_model = "gpt-5.4-mini"
 
+    def effective_model(self, model: str | None) -> str | None:
+        return model or self.default_model
+
     def build_command(
         self,
         prompt: str,
@@ -180,6 +187,7 @@ class CodexRuntime(RuntimeAdapter):
             self.executable,
             "--dangerously-bypass-approvals-and-sandbox",
             "exec",
+            "--ignore-user-config",
             "--json",
         ]
         argv.extend(["-m", model or self.default_model])

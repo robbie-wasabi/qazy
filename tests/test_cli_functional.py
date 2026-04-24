@@ -11,9 +11,11 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from qazy.cli import main
+from qazy.config import format_config_payload
 from qazy.runner import browser_session_name, parse_sections
 
 
@@ -336,6 +338,11 @@ class QazyCliFunctionalTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
 
+    def write_formatted_config(self, payload: dict[str, object]) -> Path:
+        path = self.root / "qazy.config.json"
+        path.write_text(format_config_payload(payload), encoding="utf-8")
+        return path
+
     def start_attached_server(self, port: int) -> subprocess.Popen[str]:
         process = subprocess.Popen(
             [str(self.bin_dir / "pnpm")],
@@ -394,7 +401,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn("Starting run", output)
         self.assertIn("[done]", output)
         self.assertIn("Total tokens: 180 total", output)
-        result_dirs = list((self.root / "user-scenarios-results").iterdir())
+        result_dirs = list((self.root / ".qazy/results").iterdir())
         self.assertEqual(len(result_dirs), 1)
         result_file = result_dirs[0] / "user-scenarios--login-test.md"
         self.assertTrue(result_file.exists())
@@ -429,7 +436,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("Scenario:   user-scenarios/direct-login", output)
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--direct-login.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--direct-login.md"
         self.assertTrue(result_file.exists())
 
     def test_run_command_supports_results_dir_override(self) -> None:
@@ -467,7 +474,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(len(result_dirs), 1)
         result_file = result_dirs[0] / "user-scenarios--custom-results.md"
         self.assertTrue(result_file.exists())
-        self.assertFalse((self.root / "user-scenarios-results").exists())
+        self.assertFalse((self.root / ".qazy/results").exists())
 
     def test_run_command_uses_results_dir_from_config(self) -> None:
         self.write_scenario(
@@ -502,7 +509,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(len(result_dirs), 1)
         result_file = result_dirs[0] / "user-scenarios--config-results.md"
         self.assertTrue(result_file.exists())
-        self.assertFalse((self.root / "user-scenarios-results").exists())
+        self.assertFalse((self.root / ".qazy/results").exists())
 
     def test_run_command_cli_results_dir_overrides_config(self) -> None:
         self.write_scenario(
@@ -595,7 +602,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         browser_commands = self.browser_log.read_text(encoding="utf-8")
         self.assertIn("cookies set next-auth.session-token fake-session", browser_commands)
         self.assertIn("/student-login", browser_commands)
-        result_file = next(next((self.root / "user-scenarios-results").iterdir()).glob("prompt--*.md"))
+        result_file = next(next((self.root / ".qazy/results").iterdir()).glob("prompt--*.md"))
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Email**: tester@example.com", content)
 
@@ -631,7 +638,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         browser_commands = self.browser_log.read_text(encoding="utf-8")
         self.assertIn("cookies set next-auth.session-token fake-session", browser_commands)
         self.assertIn("/override", browser_commands)
-        result_file = next(next((self.root / "user-scenarios-results").iterdir()).glob("prompt--*.md"))
+        result_file = next(next((self.root / ".qazy/results").iterdir()).glob("prompt--*.md"))
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Email**: tester@example.com", content)
 
@@ -666,7 +673,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertNotIn("cookies set next-auth.session-token fake-session", browser_commands)
         self.assertIn("/frontmatter", browser_commands)
         self.assertNotIn("/configured", browser_commands)
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--target-defaults.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--target-defaults.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Email**: student@example.com", content)
 
@@ -709,9 +716,39 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn("cookies set next-auth.session-token fake-session", browser_commands)
         self.assertIn("open http://localhost:", browser_commands)
         self.assertIn("/override", browser_commands)
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--override-test.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--override-test.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Email**: tester@example.com", content)
+
+    def test_run_warns_when_manual_login_credentials_are_missing(self) -> None:
+        self.write_scenario(
+            "missing-creds.scenario.md",
+            """
+            ---
+            start_page: /login
+            use_cookie: false
+            ---
+
+            ## list
+            - [ ] manual login works
+            """,
+        )
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["run", "--project-root", str(self.root), "user-scenarios/missing-creds"])
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("No complete scenario credentials provided", output)
+        self.assertIn("must not search project files", output)
+        server_logs = list((self.root / ".qazy" / "logs").glob("server-*.log"))
+        self.assertEqual(len(server_logs), 1)
+        self.assertTrue(self.browser_log.exists())
+        self.assertNotIn("cookies set", self.browser_log.read_text(encoding="utf-8"))
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--missing-creds.md"
+        content = result_file.read_text(encoding="utf-8")
+        self.assertIn("**Status**: PASSED", content)
 
     def test_run_command_frontmatter_overrides_apply_to_all_sections(self) -> None:
         self.write_scenario(
@@ -784,20 +821,205 @@ class QazyCliFunctionalTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
+        self.assertIn("Model:      gpt-5.4-mini", output)
         self.assertIn("init (thread=fake-thread)", output)
         self.assertIn("PASS — codex path", output)
         self.assertIn("[done]", output)
         self.assertIn("Total tokens: 32 total", output)
-        result_dirs = list((self.root / "user-scenarios-results").iterdir())
+        result_dirs = list((self.root / ".qazy/results").iterdir())
         self.assertEqual(len(result_dirs), 1)
         result_file = result_dirs[0] / "user-scenarios--codex-test.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Target**: local-mem (managed)", content)
         self.assertIn("**Runtime**: codex", content)
+        self.assertIn("**Model**: gpt-5.4-mini", content)
         self.assertIn("**Tokens**: 32 total", content)
         self.assertIn("PASS — codex path", content)
         logs = list((self.root / ".qazy" / "logs").glob("codex-*.log"))
         self.assertEqual(len(logs), 1)
+
+    def test_run_command_uses_runtime_defaults_from_config(self) -> None:
+        config = self.default_config_payload()
+        config["targets"]["local-mem"]["runtimeDefaults"] = {
+            "codex": {
+                "model": "gpt-config",
+                "reasoningEffort": "low",
+            }
+        }
+        self.write_config(config)
+        result_file = self.root / "result.md"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "--runtime",
+                        "codex",
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        _, kwargs = run_scenario_mock.call_args
+        self.assertEqual(kwargs["model"], "gpt-config")
+        self.assertEqual(kwargs["reasoning_effort"], "low")
+
+    def test_run_command_uses_default_runtime_from_config(self) -> None:
+        config = self.default_config_payload()
+        config["defaultRuntime"] = "codex"
+        config["targets"]["local-mem"]["runtimeDefaults"] = {
+            "codex": {
+                "model": "gpt-config",
+                "reasoningEffort": "low",
+            }
+        }
+        self.write_config(config)
+        result_file = self.root / "result.md"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        _, kwargs = run_scenario_mock.call_args
+        self.assertEqual(kwargs["runtime_name"], "codex")
+        self.assertEqual(kwargs["model"], "gpt-config")
+        self.assertEqual(kwargs["reasoning_effort"], "low")
+
+    def test_run_command_uses_logs_dir_from_config(self) -> None:
+        config = self.default_config_payload()
+        config["logsDir"] = "configured-logs"
+        self.write_config(config)
+        result_file = self.root / "result.md"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        workspace = run_scenario_mock.call_args.args[0]
+        self.assertEqual(workspace.logs_dir, (self.root / "configured-logs").resolve())
+
+    def test_cli_logs_dir_overrides_config(self) -> None:
+        config = self.default_config_payload()
+        config["logsDir"] = "configured-logs"
+        self.write_config(config)
+        result_file = self.root / "result.md"
+        cli_logs_dir = self.root / "cli-logs"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "--logs-dir",
+                        str(cli_logs_dir),
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        workspace = run_scenario_mock.call_args.args[0]
+        self.assertEqual(workspace.logs_dir, cli_logs_dir.resolve())
+
+    def test_cli_runtime_overrides_default_runtime_from_config(self) -> None:
+        config = self.default_config_payload()
+        config["defaultRuntime"] = "codex"
+        self.write_config(config)
+        result_file = self.root / "result.md"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "--runtime",
+                        "claude",
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        _, kwargs = run_scenario_mock.call_args
+        self.assertEqual(kwargs["runtime_name"], "claude")
+
+    def test_cli_model_overrides_runtime_defaults_from_config(self) -> None:
+        config = self.default_config_payload()
+        config["targets"]["local-mem"]["runtimeDefaults"] = {
+            "codex": {
+                "model": "gpt-config",
+                "reasoningEffort": "low",
+            }
+        }
+        self.write_config(config)
+        result_file = self.root / "result.md"
+
+        with patch(
+            "qazy.cli.run_scenario",
+            return_value=SimpleNamespace(results_file=result_file, status="passed"),
+        ) as run_scenario_mock:
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "run",
+                        "--project-root",
+                        str(self.root),
+                        "--runtime",
+                        "codex",
+                        "--model",
+                        "gpt-cli",
+                        "--reasoning-effort",
+                        "high",
+                        "user-scenarios/codex-test",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        _, kwargs = run_scenario_mock.call_args
+        self.assertEqual(kwargs["model"], "gpt-cli")
+        self.assertEqual(kwargs["reasoning_effort"], "high")
 
     def test_run_command_default_error_strategy_allows_named_error_screenshots(self) -> None:
         self.write_scenario(
@@ -831,7 +1053,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
                 )
 
         self.assertEqual(exit_code, 0)
-        result_dir = next((self.root / "user-scenarios-results").iterdir())
+        result_dir = next((self.root / ".qazy/results").iterdir())
         screenshot_dir = result_dir / "screenshots"
         screenshots = sorted(screenshot_dir.glob("*.png"))
         self.assertEqual(len(screenshots), 1)
@@ -871,7 +1093,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
             )
 
         self.assertEqual(exit_code, 0)
-        result_dir = next((self.root / "user-scenarios-results").iterdir())
+        result_dir = next((self.root / ".qazy/results").iterdir())
         screenshot_dir = result_dir / "screenshots"
         screenshots = sorted(screenshot_dir.glob("*.png"))
         self.assertEqual(len(screenshots), 1)
@@ -947,7 +1169,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
             exit_code = main(["batch", "--project-root", str(self.root), "user-scenarios"])
 
         self.assertEqual(exit_code, 1)
-        summary_file = next((self.root / "user-scenarios-results").iterdir()) / "summary.md"
+        summary_file = next((self.root / ".qazy/results").iterdir()) / "summary.md"
         summary = summary_file.read_text(encoding="utf-8")
         self.assertIn("- user-scenarios/pass", summary)
         self.assertIn("- user-scenarios/fail", summary)
@@ -990,7 +1212,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(exit_code, 1)
         output = stdout.getvalue()
         self.assertIn("Found 2 scenarios matching 'user-scenarios' (sequential):", output)
-        summary_file = next((self.root / "user-scenarios-results").iterdir()) / "summary.md"
+        summary_file = next((self.root / ".qazy/results").iterdir()) / "summary.md"
         self.assertTrue(summary_file.exists())
 
     def test_batch_command_supports_results_dir_override(self) -> None:
@@ -1028,7 +1250,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(len(result_dirs), 1)
         summary_file = result_dirs[0] / "summary.md"
         self.assertTrue(summary_file.exists())
-        self.assertFalse((self.root / "user-scenarios-results").exists())
+        self.assertFalse((self.root / ".qazy/results").exists())
 
     def test_rename_scenarios_dry_run_and_write(self) -> None:
         legacy = self.root / "user-scenarios" / "pages" / "work-orders" / "tsi-user"
@@ -1055,9 +1277,10 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("Agent-driven browser QA runner", output)
-        self.assertIn("Minimal qazy.config.json", output)
+        self.assertIn("Minimal qazy.config.jsonc", output)
         self.assertIn("Authentication:", output)
         self.assertIn("Limitations:", output)
+        self.assertIn("qazy config check", output)
         self.assertIn("qazy help config", output)
 
     def test_help_run_includes_scenario_format_guidance(self) -> None:
@@ -1083,8 +1306,63 @@ class QazyCliFunctionalTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Qazy looks for qazy.config.json", output)
         self.assertIn("managed | attached", output)
+        self.assertIn("qazy config check", output)
         self.assertIn("scenarioDefaults", output)
         self.assertIn("CLI overrides > scenario frontmatter > target.scenarioDefaults", output)
+
+    def test_config_check_accepts_canonical_config(self) -> None:
+        self.write_formatted_config(self.default_config_payload())
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["config", "check", "--project-root", str(self.root)])
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Config OK:", output)
+        self.assertIn("Schema: valid", output)
+        self.assertIn("Formatting: canonical", output)
+
+    def test_config_check_rejects_noncanonical_json_formatting(self) -> None:
+        self.write_config(self.default_config_payload())
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["config", "check", "--project-root", str(self.root)])
+
+        self.assertEqual(exit_code, 1)
+        output = stdout.getvalue()
+        self.assertIn("Config formatting check failed:", output)
+        self.assertIn("two-space indentation", output)
+
+    def test_config_check_schema_only_accepts_noncanonical_json_formatting(self) -> None:
+        self.write_config(self.default_config_payload())
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["config", "check", "--project-root", str(self.root), "--schema-only"])
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Config OK:", output)
+        self.assertIn("Schema: valid", output)
+        self.assertNotIn("Formatting: canonical", output)
+
+    def test_config_check_accepts_init_jsonc_config(self) -> None:
+        (self.root / "qazy.config.json").unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            init_exit_code = main(["init", "--project-root", str(self.root)])
+
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["config", "check", "--project-root", str(self.root)])
+
+        self.assertEqual(init_exit_code, 0)
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("Config OK:", output)
+        self.assertIn("Schema: valid", output)
+        self.assertIn("Formatting: skipped for JSONC", output)
 
     def test_unknown_help_topic_lists_available_topics(self) -> None:
         stdout = io.StringIO()
@@ -1097,20 +1375,23 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn("Available topics:", output)
         self.assertIn("rename-scenarios", output)
 
-    def test_init_command_writes_example_config(self) -> None:
-        example_path = self.root / "qazy.config.example.json"
-        self.assertFalse(example_path.exists())
+    def test_init_command_writes_commented_config(self) -> None:
+        config_path = self.root / "qazy.config.jsonc"
+        self.assertFalse(config_path.exists())
 
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
             exit_code = main(["init", "--project-root", str(self.root)])
 
         self.assertEqual(exit_code, 0)
-        self.assertTrue(example_path.exists())
-        payload = json.loads(example_path.read_text(encoding="utf-8"))
-        self.assertEqual(payload["defaultTarget"], "local")
-        self.assertEqual(payload["targets"]["local"]["mode"], "managed")
-        self.assertIn(str(example_path), stdout.getvalue())
+        self.assertTrue(config_path.exists())
+        content = config_path.read_text(encoding="utf-8")
+        self.assertIn("// Schema version", content)
+        self.assertIn('"defaultRuntime"', content)
+        self.assertIn('// "email": "student@example.com"', content)
+        self.assertIn('"scenarioDefaults"', content)
+        self.assertIn('"runtimeDefaults"', content)
+        self.assertIn(str(config_path), stdout.getvalue())
 
     def test_run_multi_section_shared_server_all_pass(self) -> None:
         self.write_scenario(
@@ -1154,7 +1435,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(len(server_starts), 1, f"Expected 1 server start, got {len(server_starts)}")
 
         # Result files: per-section + combined
-        result_dirs = list((self.root / "user-scenarios-results").iterdir())
+        result_dirs = list((self.root / ".qazy/results").iterdir())
         self.assertEqual(len(result_dirs), 1)
         result_dir = result_dirs[0]
         self.assertTrue((result_dir / "user-scenarios--multi-pass-s0.md").exists())
@@ -1201,7 +1482,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 1)
 
-        result_dirs = list((self.root / "user-scenarios-results").iterdir())
+        result_dirs = list((self.root / ".qazy/results").iterdir())
         result_dir = result_dirs[0]
 
         # Both sections ran despite section 0 failing
@@ -1277,7 +1558,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertNotIn("starting target", output)
         server_logs = list((self.root / ".qazy" / "logs").glob("server-*.log"))
         self.assertEqual(server_logs, [])
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--attached.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--attached.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Target**: dev-remote (attached)", content)
         self.assertIn(f"**Server**: http://localhost:{port}", content)
@@ -1349,7 +1630,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertNotIn("starting target", output)
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--no-config.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--no-config.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Target**: default (attached)", content)
         self.assertIn(f"**Server**: http://localhost:{port}", content)
@@ -1387,7 +1668,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         output = stdout.getvalue()
         self.assertIn("starting target 'default'", output)
-        result_file = next((self.root / "user-scenarios-results").iterdir()) / "user-scenarios--no-config-managed.md"
+        result_file = next((self.root / ".qazy/results").iterdir()) / "user-scenarios--no-config-managed.md"
         content = result_file.read_text(encoding="utf-8")
         self.assertIn("**Target**: default (managed)", content)
         self.assertIn("**Server**: http://127.0.0.1:", content)

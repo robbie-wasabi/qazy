@@ -11,12 +11,14 @@ from pathlib import Path
 
 from .config import (
     AUTH_PROVIDERS,
+    DEFAULT_RUNTIME,
     DEFAULT_TARGET_NAME,
     TargetDefinition,
     build_default_target,
+    config_file_is_formatted,
     get_target,
     load_config,
-    write_example_config,
+    write_config_template,
 )
 from .reporting import UsageTotals, analyze_log, format_usage
 from .runner import ScenarioOverrides, rename_scenarios, run_batch, run_prompt, run_scenario, workspace_from_root
@@ -53,13 +55,14 @@ def build_main_help() -> str:
           qazy <scenario-path|dir|glob> [options]
           qazy -p "ad hoc prompt" [options]
           qazy init [options]
+          qazy config check [options]
           qazy tokens [logs...] [options]
           qazy rename-scenarios [options]
           qazy runtimes [options]
           qazy help [command]
 
         What Qazy Needs:
-          - qazy.config.json, or use the built-in no-config target defaults
+          - qazy.config.jsonc or qazy.config.json, or use the built-in no-config target defaults
           - agent-browser on PATH
           - a runtime CLI installed ({runtimes})
 
@@ -68,13 +71,15 @@ def build_main_help() -> str:
           qazy user-scenarios/login
           qazy user-scenarios/login --base-url http://127.0.0.1:3000
           qazy "user-scenarios/**/*.scenario.md" --parallel
-          qazy -p "test login flow for student" --start-page /login --no-use-cookie
+          qazy -p "test login flow for student" --start-page /login --no-use-cookie \\
+            --email student@example.com --password secret123
+          qazy config check
           qazy tokens
           qazy runtimes --smoke
 
         Key Run Options:
-          --target NAME                  Pick a target from qazy.config.json
-          --base-url URL                 Use an attached target without qazy.config.json
+          --target NAME                  Pick a target from qazy.config.jsonc / qazy.config.json
+          --base-url URL                 Use an attached target without a config file
           --runtime NAME                 Runtime CLI to use
           --email/--password             Override scenario credentials
           --start-page                   Override scenario start_page
@@ -86,10 +91,13 @@ def build_main_help() -> str:
           --results-dir / --logs-dir     Override output locations
           --parallel / --max-workers     Batch execution controls
 
-        Minimal qazy.config.json:
+        Minimal qazy.config.jsonc:
           {{
             "version": 1,
             "defaultTarget": "local",
+            "defaultRuntime": "codex",
+            "resultsDir": ".qazy/results",
+            "logsDir": ".qazy/logs",
             "targets": {{
               "local": {{
                 "mode": "managed",
@@ -113,16 +121,18 @@ def build_main_help() -> str:
 
         Scenario Fields:
           email, password, start_page, use_cookie, auth_provider, auth_cookie_prefix
+          email/password are required for use_cookie=true. For use_cookie=false,
+          omitted credentials are reported and the runtime is told not to search for them.
           CLI overrides win; target.scenarioDefaults can fill missing values.
 
         Authentication:
           use_cookie=true   built-in credentials-cookie login; pick with auth_provider
                             - nextauth (default):   GET /api/auth/csrf then POST /api/auth/callback/credentials
                             - better-auth:          POST /api/auth/sign-in/email (JSON)
-          use_cookie=false  runtime logs in manually in the browser
+          use_cookie=false  runtime logs in manually in the browser when credentials are provided
 
         Outputs:
-          results markdown   <resultsDir>/<run-id>/
+          results markdown   .qazy/results/<run-id>/ by default
           runtime logs       .qazy/logs/ by default
           exit code          0 on pass, 1 on fail/error
 
@@ -152,7 +162,8 @@ def build_scenario_help_epilog() -> str:
           qazy user-scenarios/login
           qazy user-scenarios/login --base-url http://127.0.0.1:3000
           qazy "user-scenarios/**/*.scenario.md" --parallel
-          qazy -p "test login flow for student" --start-page /login --no-use-cookie
+          qazy -p "test login flow for student" --start-page /login --no-use-cookie \\
+            --email student@example.com --password secret123
           qazy user-scenarios/login --target staging --runtime codex
 
         Scenario Sources:
@@ -163,10 +174,12 @@ def build_scenario_help_epilog() -> str:
         Scenario Fields:
           email, password, start_page, use_cookie, auth_provider, auth_cookie_prefix
           CLI overrides apply to every section in a multi-section scenario file.
+          email/password are required for use_cookie=true. For use_cookie=false,
+          omitted credentials are reported and the runtime is told not to search for them.
           target.scenarioDefaults can fill missing values before CLI overrides are applied.
 
         No-config mode:
-          - with no qazy.config.json, Qazy defaults to attached http://127.0.0.1:3000
+          - with no config file, Qazy defaults to attached http://127.0.0.1:3000
           - --base-url points Qazy at another existing app
           - --dev-command starts a managed app and uses http://127.0.0.1:{appPort}
 
@@ -190,10 +203,10 @@ def build_scenario_help_epilog() -> str:
 
         Authentication:
           use_cookie=true   built-in credentials-cookie login (nextauth | better-auth)
-          use_cookie=false  runtime logs in manually in the browser
+          use_cookie=false  runtime logs in manually in the browser when credentials are provided
 
         Outputs:
-          - results markdown under <resultsDir>/<run-id>/
+          - results markdown under .qazy/results/<run-id>/ by default
           - runtime logs under .qazy/logs/
           - exit code 0 on pass, 1 on fail/error
 
@@ -224,11 +237,29 @@ def build_init_help_epilog() -> str:
         Examples:
           qazy init
           qazy init --force
-          qazy init --output qazy.config.json
+          qazy init --output qazy.config.jsonc
 
         Notes:
-          - Writes qazy.config.example.json by default.
-          - Intended as a starting point for editing, not a repo-specific final config.
+          - Writes qazy.config.jsonc by default.
+          - Includes every supported config field, with optional fields commented out.
+          - The generated file is a usable config; edit and uncomment only what you need.
+        """
+    ).rstrip()
+
+
+def build_config_command_epilog() -> str:
+    return textwrap.dedent(
+        """\
+        Examples:
+          qazy config check
+          qazy config check --config-file qazy.config.jsonc
+          qazy config check --schema-only
+
+        Notes:
+          - Validates that the config parses as a supported Qazy config.
+          - JSONC comments and trailing commas are supported.
+          - For strict .json files, the default check also requires canonical two-space formatting.
+          - Use --schema-only when you only want schema validation.
         """
     ).rstrip()
 
@@ -267,14 +298,21 @@ def build_config_help() -> str:
         qazy help config
         ================
 
-        Qazy looks for qazy.config.json in the project root by default.
+        Qazy looks for qazy.config.json first, then qazy.config.jsonc in the project root.
         You can override that with --config-file. If no config exists, Qazy can still run
         with its built-in default target behavior.
+
+        Commands:
+          qazy config check              Validate schema and JSON/JSONC parsing
+          qazy config check --schema-only
+                                         Validate schema only
 
         Root Fields:
           version         config schema version; currently 1
           defaultTarget   target used when --target is omitted
-          resultsDir      optional default results directory
+          defaultRuntime  runtime used when --runtime is omitted
+          resultsDir      optional default results directory; default .qazy/results
+          logsDir         optional default log directory; default .qazy/logs
           targets         named target definitions
 
         Target Fields:
@@ -287,18 +325,24 @@ def build_config_help() -> str:
           parallelSafe    required for batch --parallel
           scenarioDefaults
                           default email/password/startPage/useCookie/authProvider/authCookiePrefix values
+          runtimeDefaults default runtime model/reasoningEffort values by runtime name
 
         Minimal Managed Target:
           {
             "version": 1,
             "defaultTarget": "local",
+            "defaultRuntime": "codex",
             "targets": {
               "local": {
                 "mode": "managed",
                 "baseUrl": "http://localhost:{appPort}",
                 "devCommand": "pnpm dev",
                 "ports": {"appPort": "auto"},
-                "env": {"PORT": "{appPort}"}
+                "env": {"PORT": "{appPort}"},
+                "runtimeDefaults": {
+                  "codex": {"model": "gpt-5.4-mini", "reasoningEffort": "low"},
+                  "claude": {"model": "claude-sonnet-4-5"}
+                }
               }
             }
           }
@@ -313,11 +357,13 @@ def build_config_help() -> str:
             CLI overrides > scenario frontmatter > target.scenarioDefaults > built-in defaults
 
         Notes:
-          - resultsDir is resolved relative to qazy.config.json when relative
+          - resultsDir and logsDir are resolved relative to the config file when relative
+          - --runtime overrides defaultRuntime
+          - --model and --reasoning-effort override target.runtimeDefaults
           - logs default to .qazy/logs/, with legacy qazy/logs/ still honored if present
           - ready.type currently only supports "http"
-          - without qazy.config.json, Qazy defaults to attached http://127.0.0.1:3000
-          - without qazy.config.json, --dev-command creates a managed local target
+          - without a config file, Qazy defaults to attached http://127.0.0.1:3000
+          - without a config file, --dev-command creates a managed local target
         """
     ).rstrip()
 
@@ -345,7 +391,9 @@ def build_auth_help() -> str:
           4. open start_page
 
         use_cookie=false
-          Qazy does no pre-authentication. The runtime must log in manually in the browser.
+          Qazy does no pre-authentication. The runtime must log in manually in the
+          browser when credentials are provided. If credentials are omitted, Qazy
+          prints that on startup and instructs the runtime not to search for them.
 
         Credential Sources:
           - scenario frontmatter: email, password, auth_provider, auth_cookie_prefix
@@ -356,7 +404,9 @@ def build_auth_help() -> str:
         Important Limits:
           - built-in auth only covers NextAuth and Better Auth credentials-cookie login
           - SSO, OAuth, magic links, MFA, and custom login flows must be browser-driven
-          - email/password are only required when use_cookie resolves to true
+          - email/password are required for use_cookie=true built-in auth
+          - use_cookie=false can run without credentials, but the runtime is instructed
+            not to search files, env vars, source code, logs, or config for them
           - auth_cookie_prefix is only used by better-auth (matches Better Auth's
             advanced.cookiePrefix; defaults to "better-auth")
         """
@@ -475,6 +525,29 @@ def build_init_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_config_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="qazy config",
+        description="Inspect and validate Qazy config files.",
+        epilog=build_config_command_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="config_command", required=True)
+    check = subparsers.add_parser(
+        "check",
+        description="Validate qazy.config.jsonc or qazy.config.json schema and formatting.",
+        help="Validate Qazy config schema and formatting",
+    )
+    check.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root")
+    check.add_argument("--config-file", type=Path, help="Path to a qazy.config.jsonc or qazy.config.json file")
+    check.add_argument(
+        "--schema-only",
+        action="store_true",
+        help="Validate the Qazy config schema without checking JSON formatting",
+    )
+    return parser
+
+
 def build_tokens_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="qazy tokens",
@@ -518,9 +591,9 @@ def add_run_batch_workspace_args(parser: argparse.ArgumentParser) -> None:
 
 
 def add_target_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--target", dest="target_name", help="Named target from qazy.config.json")
-    parser.add_argument("--config-file", type=Path, help="Path to a qazy.config.json file")
-    parser.add_argument("--base-url", help="Use an attached target URL when qazy.config.json is absent")
+    parser.add_argument("--target", dest="target_name", help="Named target from a Qazy config file")
+    parser.add_argument("--config-file", type=Path, help="Path to a qazy.config.jsonc or qazy.config.json file")
+    parser.add_argument("--base-url", help="Use an attached target URL when no config file is present")
 
 
 def add_logs_workspace_args(parser: argparse.ArgumentParser) -> None:
@@ -536,9 +609,9 @@ def add_rename_workspace_args(parser: argparse.ArgumentParser) -> None:
 def add_runtime_arg(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--runtime",
-        default="claude",
+        default=None,
         choices=[runtime.name for runtime in list_runtimes()],
-        help="Agent runtime to execute",
+        help=f"Agent runtime to execute (default: config defaultRuntime or {DEFAULT_RUNTIME})",
     )
     parser.add_argument("--model", help="Optional runtime model override")
     parser.add_argument("--reasoning-effort", help="Optional runtime reasoning/effort override")
@@ -600,12 +673,17 @@ def add_frontmatter_override_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def workspace_from_args(args: argparse.Namespace, *, config_results_dir: Path | None = None):
+def workspace_from_args(
+    args: argparse.Namespace,
+    *,
+    config_results_dir: Path | None = None,
+    config_logs_dir: Path | None = None,
+):
     return workspace_from_root(
         args.project_root,
         scenarios_dir=getattr(args, "scenarios_dir", None),
         results_dir=getattr(args, "results_dir", None) or config_results_dir,
-        logs_dir=getattr(args, "logs_dir", None),
+        logs_dir=getattr(args, "logs_dir", None) or config_logs_dir,
     )
 
 
@@ -624,6 +702,24 @@ def scenario_overrides_from_args(args: argparse.Namespace) -> ScenarioOverrides 
     return overrides
 
 
+def runtime_defaults_from_target(
+    target: TargetDefinition,
+    runtime_name: str,
+    *,
+    model_override: str | None = None,
+    reasoning_effort_override: str | None = None,
+) -> tuple[str | None, str | None]:
+    defaults = target.runtime_defaults.get(runtime_name)
+    return (
+        model_override if model_override is not None else (defaults.model if defaults else None),
+        (
+            reasoning_effort_override
+            if reasoning_effort_override is not None
+            else (defaults.reasoning_effort if defaults else None)
+        ),
+    )
+
+
 def resolve_cli_target(project_root: Path, target: str) -> bool:
     if glob.has_magic(target):
         return True
@@ -632,21 +728,51 @@ def resolve_cli_target(project_root: Path, target: str) -> bool:
     return resolved.is_dir()
 
 
-def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, TargetDefinition]:
+def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, Path | None, TargetDefinition, str]:
     try:
         config = load_config(args.project_root, config_file=args.config_file)
     except FileNotFoundError:
         if args.config_file is not None:
             raise
         if args.target_name not in {None, DEFAULT_TARGET_NAME}:
-            raise RuntimeError("--target requires qazy.config.json when selecting a named target")
+            raise RuntimeError("--target requires a config file when selecting a named target")
         if args.base_url is not None and args.dev_command is not None:
-            raise RuntimeError("--base-url and --dev-command cannot be combined without qazy.config.json")
-        return None, build_default_target(base_url=args.base_url, managed=args.dev_command is not None)
+            raise RuntimeError("--base-url and --dev-command cannot be combined without a config file")
+        return (
+            None,
+            None,
+            build_default_target(base_url=args.base_url, managed=args.dev_command is not None),
+            args.runtime or DEFAULT_RUNTIME,
+        )
 
     if args.base_url is not None:
-        raise RuntimeError("--base-url is only supported when qazy.config.json is absent")
-    return config.results_dir, get_target(config, args.target_name)
+        raise RuntimeError("--base-url is only supported when no config file is present")
+    return config.results_dir, config.logs_dir, get_target(config, args.target_name), args.runtime or config.default_runtime
+
+
+def run_config_check(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(args.project_root, config_file=args.config_file)
+        if config.source is None:
+            raise RuntimeError("No config file was loaded")
+        if not args.schema_only and not config_file_is_formatted(config.source):
+            print(f"Config formatting check failed: {config.source}")
+            print("Expected canonical JSON formatting: two-space indentation and a trailing newline.")
+            return 1
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(f"Config check failed: {exc}")
+        return 1
+
+    print(f"Config OK: {config.source}")
+    if args.schema_only:
+        print("Schema: valid")
+    else:
+        print("Schema: valid")
+        if config.source.suffix == ".jsonc":
+            print("Formatting: skipped for JSONC")
+        else:
+            print("Formatting: canonical")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -702,9 +828,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "init":
         args = build_init_parser().parse_args(raw_argv[1:])
-        path = write_example_config(args.project_root, output=args.output, force=args.force)
+        path = write_config_template(args.project_root, output=args.output, force=args.force)
         print(path)
         return 0
+
+    if command == "config":
+        args = build_config_parser().parse_args(raw_argv[1:])
+        if args.config_command == "check":
+            return run_config_check(args)
+        raise RuntimeError(f"Unsupported config command: {args.config_command}")
 
     if command == "rename-scenarios":
         args = build_rename_parser().parse_args(raw_argv[1:])
@@ -771,18 +903,28 @@ def main(argv: list[str] | None = None) -> int:
     if not is_batch and args.max_workers is not None:
         parser.error("--max-workers requires a directory or glob target")
 
-    config_results_dir, target = resolve_run_target(args)
-    workspace = workspace_from_args(args, config_results_dir=config_results_dir)
+    config_results_dir, config_logs_dir, target, runtime_name = resolve_run_target(args)
+    workspace = workspace_from_args(
+        args,
+        config_results_dir=config_results_dir,
+        config_logs_dir=config_logs_dir,
+    )
     scenario_overrides = scenario_overrides_from_args(args)
+    model, reasoning_effort = runtime_defaults_from_target(
+        target,
+        runtime_name,
+        model_override=args.model,
+        reasoning_effort_override=args.reasoning_effort,
+    )
 
     if args.prompt is not None:
         result = run_prompt(
             workspace,
             args.prompt,
             target=target,
-            runtime_name=args.runtime,
-            model=args.model,
-            reasoning_effort=args.reasoning_effort,
+            runtime_name=runtime_name,
+            model=model,
+            reasoning_effort=reasoning_effort,
             run_id=args.run_id,
             app_port=args.app_port,
             mongo_port=args.mongo_port,
@@ -800,9 +942,9 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             args.target,
             target=target,
-            runtime_name=args.runtime,
-            model=args.model,
-            reasoning_effort=args.reasoning_effort,
+            runtime_name=runtime_name,
+            model=model,
+            reasoning_effort=reasoning_effort,
             run_id=args.run_id,
             app_port=args.app_port,
             mongo_port=args.mongo_port,
@@ -819,9 +961,9 @@ def main(argv: list[str] | None = None) -> int:
         workspace,
         args.target,
         target=target,
-        runtime_name=args.runtime,
-        model=args.model,
-        reasoning_effort=args.reasoning_effort,
+        runtime_name=runtime_name,
+        model=model,
+        reasoning_effort=reasoning_effort,
         parallel=args.parallel,
         max_workers=args.max_workers,
         timeout=args.timeout,

@@ -5,13 +5,23 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from qazy.config import build_default_target, get_target, load_config, resolve_target, write_example_config
+from qazy.config import (
+    build_config_template_text,
+    build_default_target,
+    config_file_is_formatted,
+    format_config_payload,
+    get_target,
+    load_config,
+    read_config_payload,
+    resolve_target,
+    write_config_template,
+)
 
 
 class ConfigTests(unittest.TestCase):
     def test_load_config_requires_repo_config(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
-            with self.assertRaisesRegex(FileNotFoundError, "Create qazy.config.json"):
+            with self.assertRaisesRegex(FileNotFoundError, "qazy init"):
                 load_config(Path(tempdir))
 
     def test_build_default_attached_target_uses_localhost_3000(self) -> None:
@@ -35,18 +45,99 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(target.ready.path, "/")
         self.assertEqual(target.ready.timeout_seconds, 60)
 
-    def test_write_example_config_creates_starter_file(self) -> None:
+    def test_write_config_template_creates_commented_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
 
-            path = write_example_config(root)
+            path = write_config_template(root)
 
-            self.assertEqual(path, (root / "qazy.config.example.json").resolve())
+            self.assertEqual(path, (root / "qazy.config.jsonc").resolve())
             self.assertTrue(path.exists())
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("// Schema version", content)
+            self.assertIn('// "email": "student@example.com"', content)
+            self.assertIn('// ,"attached-local"', content)
+
+            payload = read_config_payload(path)
             self.assertEqual(payload["defaultTarget"], "local")
+            self.assertEqual(payload["defaultRuntime"], "claude")
+            self.assertEqual(payload["resultsDir"], ".qazy/results")
+            self.assertEqual(payload["logsDir"], ".qazy/logs")
             self.assertEqual(payload["targets"]["local"]["mode"], "managed")
             self.assertEqual(payload["targets"]["local"]["ready"]["path"], "/")
+            self.assertEqual(payload["targets"]["local"]["ports"]["appPort"], "auto")
+            self.assertEqual(payload["targets"]["local"]["scenarioDefaults"]["authProvider"], "nextauth")
+            self.assertIn("codex", payload["targets"]["local"]["runtimeDefaults"])
+            self.assertIn("claude", payload["targets"]["local"]["runtimeDefaults"])
+            self.assertIn("opencode", payload["targets"]["local"]["runtimeDefaults"])
+            self.assertNotIn("attached-local", payload["targets"])
+
+            config = load_config(root)
+            self.assertEqual(config.results_dir, (root / ".qazy/results").resolve())
+            self.assertEqual(config.logs_dir, (root / ".qazy/logs").resolve())
+            self.assertEqual(config.default_runtime, "claude")
+
+    def test_config_template_text_parses_as_jsonc(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "qazy.config.jsonc"
+            path.write_text(build_config_template_text(), encoding="utf-8")
+
+            payload = read_config_payload(path)
+
+        self.assertEqual(payload["targets"]["local"]["env"]["PORT"], "{appPort}")
+
+    def test_config_file_is_formatted_checks_canonical_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            path = root / "qazy.config.json"
+            payload = {
+                "version": 1,
+                "defaultTarget": "local",
+                "targets": {
+                    "local": {
+                        "mode": "attached",
+                        "baseUrl": "http://127.0.0.1:3000",
+                    }
+                },
+            }
+
+            path.write_text(format_config_payload(payload), encoding="utf-8")
+            self.assertTrue(config_file_is_formatted(path))
+
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            self.assertFalse(config_file_is_formatted(path))
+
+    def test_config_file_is_formatted_skips_jsonc_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            path = Path(tempdir) / "qazy.config.jsonc"
+            path.write_text(build_config_template_text(), encoding="utf-8")
+
+            self.assertTrue(config_file_is_formatted(path))
+
+    def test_load_config_parses_jsonc_comments_and_trailing_commas(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.jsonc").write_text(
+                """
+                {
+                  // comment before a top-level field
+                  "version": 1,
+                  "defaultTarget": "local",
+                  "targets": {
+                    "local": {
+                      "mode": "attached",
+                      "baseUrl": "http://127.0.0.1:3000", // trailing comment
+                    },
+                  },
+                }
+                """,
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        target = get_target(config, None)
+        self.assertEqual(target.base_url, "http://127.0.0.1:3000")
 
     def test_load_config_mentions_repo_root_example_file_when_present(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -99,6 +190,54 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(target.ready.path, "/healthz")
         self.assertEqual(target.ready.timeout_seconds, 15)
         self.assertIsNone(config.results_dir)
+        self.assertEqual(config.default_runtime, "claude")
+
+    def test_load_config_parses_default_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "defaultRuntime": "codex",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "http://127.0.0.1:3000",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        self.assertEqual(config.default_runtime, "codex")
+
+    def test_load_config_rejects_unknown_default_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "defaultRuntime": "made-up-runtime",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "http://127.0.0.1:3000",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "defaultRuntime.*made-up-runtime"):
+                load_config(root)
 
     def test_load_config_parses_results_dir_relative_to_config_file(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -123,6 +262,30 @@ class ConfigTests(unittest.TestCase):
             config = load_config(root)
 
         self.assertEqual(config.results_dir, (root / "tmp" / "qazy-results").resolve())
+
+    def test_load_config_parses_logs_dir_relative_to_config_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "dev-remote",
+                        "logsDir": "tmp/qazy-logs",
+                        "targets": {
+                            "dev-remote": {
+                                "mode": "attached",
+                                "baseUrl": "https://dev.complora.com",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        self.assertEqual(config.logs_dir, (root / "tmp" / "qazy-logs").resolve())
 
     def test_load_config_parses_target_scenario_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -182,6 +345,29 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "'resultsDir' must be a non-empty string"):
                 load_config(root)
 
+    def test_load_config_rejects_invalid_logs_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "dev-remote",
+                        "logsDir": {},
+                        "targets": {
+                            "dev-remote": {
+                                "mode": "attached",
+                                "baseUrl": "https://dev.complora.com",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "'logsDir' must be a non-empty string"):
+                load_config(root)
+
     def test_load_config_parses_auth_provider_scenario_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -212,6 +398,69 @@ class ConfigTests(unittest.TestCase):
         target = get_target(config, None)
         self.assertEqual(target.scenario_defaults.auth_provider, "better-auth")
         self.assertEqual(target.scenario_defaults.auth_cookie_prefix, "myapp")
+
+    def test_load_config_parses_runtime_defaults(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "managed",
+                                "baseUrl": "http://localhost:{appPort}",
+                                "devCommand": "pnpm dev",
+                                "ports": {"appPort": "auto"},
+                                "runtimeDefaults": {
+                                    "claude": {
+                                        "model": "claude-sonnet-4-5",
+                                    },
+                                    "codex": {
+                                        "model": "gpt-5.4-mini",
+                                        "reasoningEffort": "low",
+                                    },
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        target = get_target(config, None)
+        self.assertEqual(target.runtime_defaults["claude"].model, "claude-sonnet-4-5")
+        self.assertIsNone(target.runtime_defaults["claude"].reasoning_effort)
+        self.assertEqual(target.runtime_defaults["codex"].model, "gpt-5.4-mini")
+        self.assertEqual(target.runtime_defaults["codex"].reasoning_effort, "low")
+
+    def test_load_config_rejects_unknown_runtime_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "https://dev.example.com",
+                                "runtimeDefaults": {
+                                    "made-up-runtime": {"model": "x"},
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "runtimeDefaults.*made-up-runtime"):
+                load_config(root)
 
     def test_load_config_rejects_unknown_auth_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:

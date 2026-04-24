@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import shlex
+import textwrap
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 
@@ -24,6 +25,8 @@ AUTH_PROVIDERS = ("nextauth", "better-auth")
 DEFAULT_AUTH_PROVIDER = "nextauth"
 DEFAULT_BETTER_AUTH_COOKIE_PREFIX = "better-auth"
 DEFAULT_AUTH_BASE_PATH = "/api/auth"
+RUNTIME_NAMES = ("claude", "codex", "opencode")
+DEFAULT_RUNTIME = "claude"
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,12 @@ class ScenarioDefaults:
 
 
 @dataclass(frozen=True)
+class RuntimeDefaults:
+    model: str | None = None
+    reasoning_effort: str | None = None
+
+
+@dataclass(frozen=True)
 class TargetDefinition:
     name: str
     mode: str
@@ -63,13 +72,16 @@ class TargetDefinition:
     ready: ReadyCheck
     parallel_safe: bool
     scenario_defaults: ScenarioDefaults
+    runtime_defaults: dict[str, RuntimeDefaults] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class QazyConfig:
     source: Path | None
     results_dir: Path | None
+    logs_dir: Path | None
     default_target: str
+    default_runtime: str
     targets: dict[str, TargetDefinition]
 
 
@@ -85,12 +97,17 @@ class ResolvedTarget:
     ready: ReadyCheck
     parallel_safe: bool
     scenario_defaults: ScenarioDefaults
+    runtime_defaults: dict[str, RuntimeDefaults] = field(default_factory=dict)
 
 
 DEFAULT_TARGET_NAME = "default"
 DEFAULT_ATTACHED_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_MANAGED_BASE_URL = "http://127.0.0.1:{appPort}"
 DEFAULT_READY_CHECK = ReadyCheck(type="http", path="/", timeout_seconds=60)
+DEFAULT_RESULTS_DIR = ".qazy/results"
+DEFAULT_LOGS_DIR = ".qazy/logs"
+DEFAULT_CONFIG_TEMPLATE_FILE = "qazy.config.jsonc"
+CONFIG_FILE_NAMES = ("qazy.config.json", "qazy.config.jsonc")
 
 
 def build_default_target(*, base_url: str | None = None, managed: bool = False) -> TargetDefinition:
@@ -126,6 +143,9 @@ def build_example_config_payload() -> dict[str, object]:
     return {
         "version": 1,
         "defaultTarget": "local",
+        "defaultRuntime": DEFAULT_RUNTIME,
+        "resultsDir": DEFAULT_RESULTS_DIR,
+        "logsDir": DEFAULT_LOGS_DIR,
         "targets": {
             "local": {
                 "mode": "managed",
@@ -133,6 +153,7 @@ def build_example_config_payload() -> dict[str, object]:
                 "devCommand": "pnpm dev",
                 "ports": {
                     "appPort": "auto",
+                    "mongoPort": None,
                 },
                 "env": {
                     "PORT": "{appPort}",
@@ -144,22 +165,269 @@ def build_example_config_payload() -> dict[str, object]:
                 },
                 "parallelSafe": False,
                 "scenarioDefaults": {
+                    "email": None,
+                    "password": None,
                     "startPage": "/login",
                     "useCookie": False,
+                    "authProvider": DEFAULT_AUTH_PROVIDER,
+                    "authCookiePrefix": None,
+                    "authBasePath": DEFAULT_AUTH_BASE_PATH,
                 },
+                "runtimeDefaults": {
+                    "codex": {
+                        "model": "gpt-5.4-mini",
+                        "reasoningEffort": "low",
+                    },
+                    "claude": {
+                        "model": None,
+                        "reasoningEffort": None,
+                    },
+                    "opencode": {
+                        "model": None,
+                        "reasoningEffort": None,
+                    },
+                },
+            },
+            "attached-local": {
+                "mode": "attached",
+                "baseUrl": DEFAULT_ATTACHED_BASE_URL,
+                "ready": {
+                    "type": "http",
+                    "path": DEFAULT_READY_CHECK.path,
+                    "timeoutSeconds": DEFAULT_READY_CHECK.timeout_seconds,
+                },
+                "parallelSafe": True,
             }
         },
     }
 
 
-def write_example_config(
+def build_config_template_text() -> str:
+    return textwrap.dedent(
+        f"""\
+        {{
+          // Schema version. Keep this at 1 until Qazy documents a new version.
+          "version": 1,
+
+          // Target used when --target is omitted.
+          "defaultTarget": "local",
+
+          // Runtime used when --runtime is omitted: "claude", "codex", or "opencode".
+          "defaultRuntime": "{DEFAULT_RUNTIME}",
+
+          // Where result markdown and screenshots are written.
+          "resultsDir": "{DEFAULT_RESULTS_DIR}",
+
+          // Where runtime and server logs are written.
+          "logsDir": "{DEFAULT_LOGS_DIR}",
+
+          "targets": {{
+            "local": {{
+              // mode: "managed" starts devCommand; "attached" uses baseUrl as-is.
+              "mode": "managed",
+
+              // Use {{appPort}} and/or {{mongoPort}} placeholders with ports below.
+              "baseUrl": "{DEFAULT_MANAGED_BASE_URL}",
+
+              // Required for managed targets. Qazy starts and later stops this command.
+              "devCommand": "pnpm dev",
+
+              "ports": {{
+                // Use "auto" to reserve a free port, or use a fixed positive integer.
+                "appPort": "auto",
+                // "mongoPort": "auto"
+              }},
+
+              "env": {{
+                // Managed target environment variables. Placeholders are rendered before start.
+                "PORT": "{{appPort}}",
+                // "MONGODB_URI": "mongodb://127.0.0.1:{{mongoPort}}/qazy"
+              }},
+
+              "ready": {{
+                // Currently only "http" is supported.
+                "type": "http",
+                "path": "/",
+                "timeoutSeconds": 60
+              }},
+
+              // Required for batch --parallel. Keep false unless this target can run concurrently.
+              "parallelSafe": false,
+
+              "scenarioDefaults": {{
+                // "email": "student@example.com",
+                // "password": "secret123",
+                "startPage": "/login",
+                "useCookie": false,
+
+                // authProvider: "nextauth" or "better-auth".
+                "authProvider": "{DEFAULT_AUTH_PROVIDER}",
+                // "authCookiePrefix": "{DEFAULT_BETTER_AUTH_COOKIE_PREFIX}",
+                "authBasePath": "{DEFAULT_AUTH_BASE_PATH}"
+              }},
+
+              "runtimeDefaults": {{
+                "codex": {{
+                  "model": "gpt-5.4-mini",
+                  "reasoningEffort": "low"
+                }},
+                "claude": {{
+                  // "model": "claude-sonnet-4-5",
+                  // "reasoningEffort": "default"
+                }},
+                "opencode": {{
+                  // "model": "openai/gpt-5.4-mini",
+                  // "reasoningEffort": "standard"
+                }}
+              }}
+            }}
+
+            // Alternate target shape for an already-running app:
+            // ,"attached-local": {{
+            //   "mode": "attached",
+            //   "baseUrl": "{DEFAULT_ATTACHED_BASE_URL}",
+            //   "ready": {{
+            //     "type": "http",
+            //     "path": "/",
+            //     "timeoutSeconds": 60
+            //   }},
+            //   "parallelSafe": true
+            // }}
+          }}
+        }}
+        """
+    )
+
+
+def format_config_payload(payload: object) -> str:
+    return f"{json.dumps(payload, indent=2)}\n"
+
+
+def strip_jsonc_comments(value: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    length = len(value)
+
+    while index < length:
+        char = value[index]
+        next_char = value[index + 1] if index + 1 < length else ""
+
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+
+        if char == "/" and next_char == "/":
+            result.extend((" ", " "))
+            index += 2
+            while index < length and value[index] not in "\r\n":
+                result.append(" ")
+                index += 1
+            continue
+
+        if char == "/" and next_char == "*":
+            result.extend((" ", " "))
+            index += 2
+            while index < length:
+                if value[index] == "*" and index + 1 < length and value[index + 1] == "/":
+                    result.extend((" ", " "))
+                    index += 2
+                    break
+                result.append(value[index] if value[index] in "\r\n" else " ")
+                index += 1
+            continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
+
+
+def strip_jsonc_trailing_commas(value: str) -> str:
+    result: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    length = len(value)
+
+    while index < length:
+        char = value[index]
+
+        if in_string:
+            result.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            result.append(char)
+            index += 1
+            continue
+
+        if char == ",":
+            lookahead = index + 1
+            while lookahead < length and value[lookahead].isspace():
+                lookahead += 1
+            if lookahead < length and value[lookahead] in "}]":
+                index += 1
+                continue
+
+        result.append(char)
+        index += 1
+
+    return "".join(result)
+
+
+def parse_jsonc(value: str) -> object:
+    return json.loads(strip_jsonc_trailing_commas(strip_jsonc_comments(value)))
+
+
+def read_config_payload(path: Path) -> dict[str, object]:
+    try:
+        payload = parse_jsonc(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Invalid Qazy config at {path}: invalid JSON/JSONC at line {exc.lineno} column {exc.colno}: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Invalid Qazy config at {path}: expected an object")
+    return payload
+
+
+def config_file_is_formatted(path: Path) -> bool:
+    if path.suffix == ".jsonc":
+        return True
+    return path.read_text(encoding="utf-8") == format_config_payload(read_config_payload(path))
+
+
+def write_config_template(
     project_root: Path,
     *,
     output: Path | None = None,
     force: bool = False,
 ) -> Path:
     root = project_root.resolve()
-    path = output or Path("qazy.config.example.json")
+    path = output or Path(DEFAULT_CONFIG_TEMPLATE_FILE)
     resolved = path.expanduser()
     if not resolved.is_absolute():
         resolved = (root / resolved).resolve()
@@ -170,8 +438,17 @@ def write_example_config(
         raise FileExistsError(f"Refusing to overwrite existing file: {resolved}")
 
     resolved.parent.mkdir(parents=True, exist_ok=True)
-    resolved.write_text(f"{json.dumps(build_example_config_payload(), indent=2)}\n", encoding="utf-8")
+    resolved.write_text(build_config_template_text(), encoding="utf-8")
     return resolved
+
+
+def write_example_config(
+    project_root: Path,
+    *,
+    output: Path | None = None,
+    force: bool = False,
+) -> Path:
+    return write_config_template(project_root, output=output, force=force)
 
 
 def find_config_file(project_root: Path, explicit_path: Path | None = None) -> Path:
@@ -186,10 +463,13 @@ def find_config_file(project_root: Path, explicit_path: Path | None = None) -> P
             raise FileNotFoundError(f"Config file not found: {path}")
         return path
 
-    candidate = (root / "qazy.config.json").resolve()
-    if candidate.is_file():
-        return candidate
+    candidates = [(root / name).resolve() for name in CONFIG_FILE_NAMES]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    default_candidate = candidates[0]
     examples = [
+        (root / DEFAULT_CONFIG_TEMPLATE_FILE).resolve(),
         (root / "qazy.config.example.json").resolve(),
         (root / "qazy" / "qazy.config.example.json").resolve(),
     ]
@@ -200,20 +480,20 @@ def find_config_file(project_root: Path, explicit_path: Path | None = None) -> P
             except ValueError:
                 display = example.name
             raise FileNotFoundError(
-                f"Qazy config not found: {candidate}. Create qazy.config.json from {display} or pass --config-file."
+                f"Qazy config not found: {default_candidate}. Create qazy.config.json from {display} "
+                f"or pass --config-file."
             )
 
     raise FileNotFoundError(
-        f"Qazy config not found: {candidate}. Create qazy.config.json or pass --config-file."
+        f"Qazy config not found: {default_candidate}. Run qazy init to create {DEFAULT_CONFIG_TEMPLATE_FILE} "
+        "or pass --config-file."
     )
 
 
 def load_config(project_root: Path, *, config_file: Path | None = None) -> QazyConfig:
     path = find_config_file(project_root, config_file)
 
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise RuntimeError(f"Invalid Qazy config at {path}: expected an object")
+    payload = read_config_payload(path)
 
     version = payload.get("version", 1)
     if version != 1:
@@ -233,9 +513,25 @@ def load_config(project_root: Path, *, config_file: Path | None = None) -> QazyC
     if default_target not in targets:
         raise RuntimeError(f"Invalid Qazy config at {path}: unknown defaultTarget '{default_target}'")
 
-    results_dir = parse_optional_path(path, "resultsDir", payload.get("resultsDir"))
+    default_runtime = payload.get("defaultRuntime", DEFAULT_RUNTIME)
+    if default_runtime not in RUNTIME_NAMES:
+        joined = ", ".join(RUNTIME_NAMES)
+        raise RuntimeError(
+            f"Invalid Qazy config at {path}: unsupported defaultRuntime "
+            f"'{default_runtime}'; must be one of: {joined}"
+        )
 
-    return QazyConfig(source=path, results_dir=results_dir, default_target=default_target, targets=targets)
+    results_dir = parse_optional_path(path, "resultsDir", payload.get("resultsDir"))
+    logs_dir = parse_optional_path(path, "logsDir", payload.get("logsDir"))
+
+    return QazyConfig(
+        source=path,
+        results_dir=results_dir,
+        logs_dir=logs_dir,
+        default_target=default_target,
+        default_runtime=default_runtime,
+        targets=targets,
+    )
 
 
 def parse_optional_path(config_path: Path, field_name: str, value: object) -> Path | None:
@@ -327,6 +623,7 @@ def resolve_target(
         ready=ready,
         parallel_safe=target.parallel_safe,
         scenario_defaults=target.scenario_defaults,
+        runtime_defaults=target.runtime_defaults,
     )
 
 
@@ -390,7 +687,61 @@ def parse_target(config_path: Path, name: object, payload: object) -> TargetDefi
         ready=parse_ready(config_path, name, payload.get("ready")),
         parallel_safe=parallel_safe,
         scenario_defaults=parse_scenario_defaults(config_path, name, payload.get("scenarioDefaults")),
+        runtime_defaults=parse_runtime_defaults(config_path, name, payload.get("runtimeDefaults")),
     )
+
+
+def parse_runtime_defaults(config_path: Path, target_name: str, payload: object) -> dict[str, RuntimeDefaults]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise RuntimeError(
+            f"Invalid Qazy config at {config_path}: target '{target_name}' runtimeDefaults must be an object"
+        )
+
+    defaults: dict[str, RuntimeDefaults] = {}
+    for runtime_name, runtime_payload in payload.items():
+        if runtime_name not in RUNTIME_NAMES:
+            joined = ", ".join(RUNTIME_NAMES)
+            raise RuntimeError(
+                f"Invalid Qazy config at {config_path}: target '{target_name}' runtimeDefaults "
+                f"has unsupported runtime '{runtime_name}'; must be one of: {joined}"
+            )
+        if not isinstance(runtime_payload, dict):
+            raise RuntimeError(
+                f"Invalid Qazy config at {config_path}: target '{target_name}' "
+                f"runtimeDefaults.{runtime_name} must be an object"
+            )
+        allowed_keys = {"model", "reasoningEffort"}
+        unknown_keys = sorted(set(runtime_payload) - allowed_keys)
+        if unknown_keys:
+            joined = ", ".join(unknown_keys)
+            raise RuntimeError(
+                f"Invalid Qazy config at {config_path}: target '{target_name}' "
+                f"runtimeDefaults.{runtime_name} has unsupported field(s): {joined}"
+            )
+
+        model = runtime_payload.get("model")
+        if model is not None and (not isinstance(model, str) or not model.strip()):
+            raise RuntimeError(
+                f"Invalid Qazy config at {config_path}: target '{target_name}' "
+                f"runtimeDefaults.{runtime_name}.model must be a non-empty string"
+            )
+
+        reasoning_effort = runtime_payload.get("reasoningEffort")
+        if reasoning_effort is not None and (
+            not isinstance(reasoning_effort, str) or not reasoning_effort.strip()
+        ):
+            raise RuntimeError(
+                f"Invalid Qazy config at {config_path}: target '{target_name}' "
+                f"runtimeDefaults.{runtime_name}.reasoningEffort must be a non-empty string"
+            )
+
+        defaults[runtime_name] = RuntimeDefaults(
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+    return defaults
 
 
 def parse_scenario_defaults(config_path: Path, target_name: str, payload: object) -> ScenarioDefaults:

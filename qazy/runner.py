@@ -27,6 +27,8 @@ from .config import (
     DEFAULT_AUTH_BASE_PATH,
     DEFAULT_AUTH_PROVIDER,
     DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
+    DEFAULT_LOGS_DIR,
+    DEFAULT_RESULTS_DIR,
     ReadyCheck,
     ResolvedTarget,
     ScenarioDefaults,
@@ -221,7 +223,7 @@ def workspace_from_root(
     logs_dir: Path | None = None,
 ) -> Workspace:
     root = project_root.resolve()
-    default_logs_dir = (root / ".qazy" / "logs").resolve()
+    default_logs_dir = (root / DEFAULT_LOGS_DIR).resolve()
     legacy_logs_dir = (root / "qazy" / "logs").resolve()
     resolved_logs_dir = logs_dir.resolve() if logs_dir is not None else default_logs_dir
     if logs_dir is None and legacy_logs_dir.exists() and not default_logs_dir.exists():
@@ -229,7 +231,7 @@ def workspace_from_root(
     return Workspace(
         project_root=root,
         scenarios_dir=(scenarios_dir or (root / "user-scenarios")).resolve(),
-        results_dir=(results_dir or (root / "user-scenarios-results")).resolve(),
+        results_dir=(results_dir or (root / DEFAULT_RESULTS_DIR)).resolve(),
         logs_dir=resolved_logs_dir,
     )
 
@@ -753,7 +755,11 @@ def wait_for_target_ready(
             return
         except Exception:
             time.sleep(1)
-    raise RuntimeError(f"Target at {base_url} not responding after {ready.timeout_seconds}s")
+    fix = (
+        "The app may not be running. Start it at that URL, configure a managed target "
+        "in qazy.config.json, or pass --dev-command so Qazy can start it."
+    )
+    raise RuntimeError(f"Target at {base_url} not responding after {ready.timeout_seconds}s. {fix}")
 
 
 def authenticate(
@@ -917,6 +923,52 @@ def build_prompt_scenario(prompt: str) -> Scenario:
 
 def join_url(base_url: str, path: str) -> str:
     return urllib.parse.urljoin(f"{base_url.rstrip('/')}/", path.lstrip("/"))
+
+
+def has_complete_credentials(section: ScenarioSection) -> bool:
+    return bool(section.email.strip() and section.password.strip())
+
+
+def missing_credentials_message(section: ScenarioSection, *, scenario_path: str) -> str:
+    base = (
+        f"No complete scenario credentials provided for '{scenario_path}' section "
+        f"{section.index} ({section.label}). "
+    )
+    if section.use_cookie:
+        return (
+            base
+            + "use_cookie=true requires credentials for built-in auth. Add them to the scenario "
+            "frontmatter, set target.scenarioDefaults.email/password, pass --email and --password, "
+            "or set use_cookie: false for browser-driven login."
+        )
+    return (
+        base
+        + "The runtime will not receive credentials and must not search project files, "
+        "environment variables, source code, logs, or config files for them."
+    )
+
+
+def validate_cookie_auth_credentials(section: ScenarioSection, *, scenario_path: str) -> None:
+    if has_complete_credentials(section):
+        return
+    raise RuntimeError(
+        f"Scenario '{scenario_path}' section {section.index} ({section.label}) requires email "
+        "and password because use_cookie is true. Add them to the scenario frontmatter, "
+        "set target.scenarioDefaults.email/password, pass --email and --password, "
+        "or set use_cookie: false for browser-driven login."
+    )
+
+
+def validate_cookie_auth_credentials_for_scenario(scenario: Scenario) -> None:
+    for section in scenario.sections:
+        if section.use_cookie:
+            validate_cookie_auth_credentials(section, scenario_path=scenario.path)
+
+
+def log_missing_credentials(scenario: Scenario, *, prefix: str = "", color: str = "") -> None:
+    for section in scenario.sections:
+        if not has_complete_credentials(section):
+            log(missing_credentials_message(section, scenario_path=scenario.path), prefix=prefix, color=color)
 
 
 def prime_browser(
@@ -1094,6 +1146,8 @@ def build_prompt(
     *,
     base_url: str,
     start_page: str,
+    email: str,
+    password: str,
     primed: bool,
     screenshot_strategy: str,
 ) -> str:
@@ -1105,10 +1159,39 @@ def build_prompt(
 The browser is already open, authenticated, and on {start_url}.
 Start by running `agent-browser snapshot -c` to inspect the page."""
     else:
+        if email.strip() and password.strip():
+            credentials_text = f"""\
+Use these scenario credentials:
+Email: {email}
+Password: {password}"""
+            scenario_credentials = f"""\
+## Scenario Credentials
+
+Use these credentials if the scenario requires login:
+Email: {email}
+Password: {password}
+"""
+        else:
+            credentials_text = """\
+No complete scenario credentials were provided.
+Do not search project files, source code, environment variables, logs, config files, or browser storage for credentials.
+If login requires credentials and none are present in the scenario text, report the item as UNTESTABLE.
+Do not sign up or create an account unless the scenario explicitly asks you to."""
+            scenario_credentials = """\
+## Scenario Credentials
+
+No complete scenario credentials were provided.
+Do not search project files, source code, environment variables, logs, config files, or browser storage for credentials.
+If login requires credentials and none are present in the scenario text, report the item as UNTESTABLE.
+Do not sign up or create an account unless the scenario explicitly asks you to.
+"""
         setup = f"""\
 ### Getting Started
 
-The browser is open at {start_url}. Log in using the scenario credentials, then begin testing."""
+The browser is open at {start_url}. {credentials_text}
+Then begin testing."""
+    if primed:
+        scenario_credentials = ""
 
     screenshot_instructions = ""
     if screenshot_strategy == "error":
@@ -1152,6 +1235,7 @@ Do not start or stop it yourself.
 
 ### Scenario
 
+{scenario_credentials}
 {body}
 
 ### Instructions
@@ -1248,12 +1332,12 @@ def _run_single_section(
     manifest_path: Path | None = None
     screenshot_dir: Path | None = None
     screenshot_prefix: str | None = None
+    effective_model = runtime.effective_model(model)
 
     try:
         primed = False
         if section.use_cookie:
-            if not section.email or not section.password:
-                raise RuntimeError("Scenario section requires email and password when use_cookie is true")
+            validate_cookie_auth_credentials(section, scenario_path=scenario.path)
             log("authenticating...", prefix=section_prefix, color=color)
             auth_session = authenticate(
                 base_url,
@@ -1309,6 +1393,8 @@ def _run_single_section(
             section.body,
             base_url=base_url,
             start_page=section.start_page,
+            email=section.email,
+            password=section.password,
             primed=primed,
             screenshot_strategy=screenshot_strategy,
         )
@@ -1363,6 +1449,7 @@ def _run_single_section(
             target_name=target.name,
             target_mode=target.mode,
             runtime=runtime.name,
+            model=effective_model,
             base_url=base_url,
             status=status,
             final_report=final_report,
@@ -1416,6 +1503,7 @@ def _run_single_section(
             target_name=target.name,
             target_mode=target.mode,
             runtime=runtime.name,
+            model=effective_model,
             base_url=base_url,
             status="error",
             final_report="",
@@ -1491,23 +1579,6 @@ def _run_prepared_scenario(
     color = color_for_index(0)
     results_dir = workspace.results_dir / actual_run_id
 
-    if len(scenario.sections) > 1:
-        return _run_multi_section(
-            workspace=workspace,
-            scenario=scenario,
-            target=resolved_target,
-            runtime=runtime,
-            run_id=actual_run_id,
-            results_dir=results_dir,
-            prefix=prefix,
-            color=color,
-            model=model,
-            reasoning_effort=reasoning_effort,
-            screenshot_strategy=screenshot_strategy,
-            headed=headed,
-        )
-
-    # Single-section path
     server: subprocess.Popen[str] | None = None
     log_path = workspace.logs_dir / f"{runtime.name}-{scenario.path.replace('/', '-')}-{int(time.time())}.log"
     results_file = results_dir / f"{scenario.path.replace('/', '--')}.md"
@@ -1517,6 +1588,9 @@ def _run_prepared_scenario(
     log(f"Run ID:     {actual_run_id}")
     log(f"Target:     {resolved_target.name} ({resolved_target.mode})")
     log(f"Runtime:    {runtime.name}")
+    effective_model = runtime.effective_model(model)
+    if effective_model:
+        log(f"Model:      {effective_model}")
     log(f"Base URL:   {base_url}")
     if resolved_target.app_port is not None:
         log(f"App port:   {resolved_target.app_port}")
@@ -1526,8 +1600,26 @@ def _run_prepared_scenario(
     log(f"Results:    {results_file}")
     log(f"Log:        {log_path}")
     log("")
+    log_missing_credentials(scenario, prefix=prefix, color=color)
 
     try:
+        validate_cookie_auth_credentials_for_scenario(scenario)
+        if len(scenario.sections) > 1:
+            return _run_multi_section(
+                workspace=workspace,
+                scenario=scenario,
+                target=resolved_target,
+                runtime=runtime,
+                run_id=actual_run_id,
+                results_dir=results_dir,
+                prefix=prefix,
+                color=color,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                screenshot_strategy=screenshot_strategy,
+                headed=headed,
+            )
+
         if resolved_target.mode == "managed":
             server = start_managed_target(workspace, resolved_target, prefix=prefix, color=color)
         wait_for_target_ready(
@@ -1563,6 +1655,7 @@ def _run_prepared_scenario(
             target_name=resolved_target.name,
             target_mode=resolved_target.mode,
             runtime=runtime.name,
+            model=effective_model,
             base_url=base_url,
             status="error",
             final_report="",
@@ -1693,6 +1786,9 @@ def _run_multi_section(
     log(f"Run ID:     {run_id}")
     log(f"Target:     {target.name} ({target.mode})")
     log(f"Runtime:    {runtime.name}")
+    effective_model = runtime.effective_model(model)
+    if effective_model:
+        log(f"Model:      {effective_model}")
     log(f"Base URL:   {base_url}")
     if target.app_port is not None:
         log(f"App port:   {target.app_port}")
@@ -1747,6 +1843,7 @@ def _run_multi_section(
             target_name=target.name,
             target_mode=target.mode,
             runtime=runtime.name,
+            model=effective_model,
             base_url=base_url,
             status="error",
             final_report="",
@@ -1806,6 +1903,7 @@ def _run_multi_section(
         target_name=target.name,
         target_mode=target.mode,
         runtime=runtime.name,
+        model=effective_model,
         base_url=base_url,
         status=agg_status,
         final_report=combined_report,
@@ -1859,9 +1957,13 @@ def run_batch(
 
     actual_run_id = generate_run_id()
     mode = "parallel" if parallel else "sequential"
+    runtime = get_runtime(runtime_name)
+    effective_model = runtime.effective_model(model)
     log(f"Run ID: {actual_run_id}")
     log(f"Target: {target.name} ({target.mode})")
     log(f"Runtime: {runtime_name}")
+    if effective_model:
+        log(f"Model: {effective_model}")
     log(f"Found {len(scenarios)} scenarios matching '{pattern}' ({mode}):")
     for scenario_path in scenarios:
         log(f"  {scenario_path}")
@@ -1922,6 +2024,7 @@ def run_batch(
         target_name=target.name,
         target_mode=target.mode,
         runtime=runtime_name,
+        model=effective_model,
         mode=mode,
         passed=passed,
         failed=failed,
@@ -1954,6 +2057,7 @@ def build_batch_summary(
     target_name: str,
     target_mode: str,
     runtime: str,
+    model: str | None,
     mode: str,
     passed: list[str],
     failed: list[str],
@@ -1965,17 +2069,23 @@ def build_batch_summary(
         f"**Run ID**: {run_id}",
         f"**Target**: {target_name} ({target_mode})",
         f"**Runtime**: {runtime}",
-        f"**Date**: {time.strftime('%Y-%m-%d')}",
-        f"**Mode**: {mode}",
-        "",
-        "## Summary",
-        "",
-        f"- Passed: {len(passed)}",
-        f"- Failed: {len(failed)}",
-        f"- Errors: {len(errors)}",
-        f"- Total: {len(passed) + len(failed) + len(errors)}",
-        "",
     ]
+    if model:
+        lines.append(f"**Model**: {model}")
+    lines.extend(
+        [
+            f"**Date**: {time.strftime('%Y-%m-%d')}",
+            f"**Mode**: {mode}",
+            "",
+            "## Summary",
+            "",
+            f"- Passed: {len(passed)}",
+            f"- Failed: {len(failed)}",
+            f"- Errors: {len(errors)}",
+            f"- Total: {len(passed) + len(failed) + len(errors)}",
+            "",
+        ]
+    )
     if failed:
         lines.extend(["## Failed", "", *[f"- {item}" for item in failed], ""])
     if errors:
@@ -1993,6 +2103,7 @@ def write_result_file(
     target_name: str,
     target_mode: str,
     runtime: str,
+    model: str | None = None,
     base_url: str,
     status: str,
     final_report: str,
@@ -2015,10 +2126,16 @@ def write_result_file(
         f"**Date**: {time.strftime('%Y-%m-%d')}",
         f"**Target**: {target_name} ({target_mode})",
         f"**Runtime**: {runtime}",
-        f"**Server**: {base_url}",
-        f"**Email**: {email}",
-        f"**Status**: {status.upper()}",
     ]
+    if model:
+        lines.append(f"**Model**: {model}")
+    lines.extend(
+        [
+            f"**Server**: {base_url}",
+            f"**Email**: {email}",
+            f"**Status**: {status.upper()}",
+        ]
+    )
     if usage_totals is not None:
         lines.append(f"**Tokens**: {format_usage_inline(usage_totals)}")
     lines.extend(

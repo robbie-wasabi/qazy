@@ -1,62 +1,89 @@
 # Qazy
 
-Qazy is a Python CLI for agent-driven browser QA. It can start a local app or attach to an existing environment, hand the browser to a runtime such as Claude or Codex through `agent-browser`, and write markdown results, screenshots, and runtime logs for each run.
+Qazy is a Python CLI for agent-driven browser QA. It can start a local app or attach to an existing environment, hand the browser to a runtime such as [Claude Code](https://code.claude.com/docs/en/overview) or [Codex](https://developers.openai.com/codex/cli) through [Agent Browser](https://agent-browser.io/), and write markdown results, screenshots, and runtime logs for each run.
+
+Use Qazy when you want a browser agent to walk through user-facing flows such as login, onboarding, checkout, dashboard checks, or smoke tests that are easier to describe in natural language than in deterministic test code.
 
 ## Install
 
+For development from this repo:
+
 ```bash
-python3 -m pip install -e .
+make install
 ```
 
-Qazy expects:
+To install the CLI so `qazy` is available outside this repo:
 
-- `agent-browser` on `PATH`
-- at least one runtime CLI on `PATH`: `claude`, `codex`, or `opencode`
-- either a `qazy.config.json` or enough CLI information to use the built-in defaults
+```bash
+pipx install --editable .
+pipx ensurepath
+```
+
+## Requirements
+
+- [Agent Browser](https://agent-browser.io/) on `PATH`
+- at least one runtime CLI on `PATH`: [Claude Code](https://code.claude.com/docs/en/overview) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), or [OpenCode](https://opencode.ai/) (`opencode`)
+- either a `qazy.config.jsonc`, `qazy.config.json`, or enough CLI flags to use the built-in defaults
+
+Check the installed runtimes with:
+
+```bash
+qazy runtimes
+qazy runtimes --smoke
+```
 
 ## Quick Start
 
-Fastest path, with no config file at all:
+Start with prompt mode. It runs one check directly from the command line and does not require a `*.scenario.md` file.
 
 ```bash
-qazy user-scenarios/login --base-url http://127.0.0.1:3000
-qazy user-scenarios/login --dev-command "pnpm dev"
-qazy init
+# Run against an app that is already running.
+qazy -p "confirm the landing page loads" \
+  --base-url http://127.0.0.1:3000 \
+  --no-use-cookie
+
+# Start a local dev server for the check.
+qazy -p "confirm the login page loads" \
+  --dev-command "pnpm dev" \
+  --start-page /login \
+  --no-use-cookie
+
+# Run with credentials and let the runtime log in through the browser.
+qazy -p "verify the student can sign in and reach the dashboard" \
+  --start-page /login \
+  --email student@example.com --password secret123 \
+  --no-use-cookie
+
+# Run with credentials and Qazy's built-in auth-cookie flow.
+qazy -p "verify the student dashboard loads" \
+  --start-page /dashboard \
+  --email student@example.com --password secret123 \
+  --use-cookie
+
+# Use Claude Code.
+qazy -p "verify the checkout flow works" \
+  --runtime claude \
+  --email student@example.com --password secret123 \
+  --no-use-cookie
+
+# Use Codex.
+qazy -p "verify the checkout flow works" \
+  --runtime codex \
+  --email student@example.com --password secret123 \
+  --no-use-cookie
 ```
 
-No-config defaults are:
+With no config file, Qazy uses these defaults:
 
-- attached target at `http://127.0.0.1:3000`
-- or, if `--dev-command` is supplied, a managed target at `http://127.0.0.1:{appPort}` with `PORT={appPort}`
+- no target flags: attach to `http://127.0.0.1:3000`
+- `--base-url URL`: attach to `URL`
+- `--dev-command "..."`: start a managed app at `http://127.0.0.1:{appPort}` with `PORT={appPort}`
 
-For repeated use, named environments, and checked-in team defaults, create `qazy.config.json` in the target project:
+## Save a Scenario
 
-```json
-{
-  "version": 1,
-  "defaultTarget": "local",
-  "targets": {
-    "local": {
-      "mode": "managed",
-      "baseUrl": "http://localhost:{appPort}",
-      "devCommand": "pnpm dev",
-      "ports": {
-        "appPort": "auto"
-      },
-      "env": {
-        "PORT": "{appPort}"
-      },
-      "scenarioDefaults": {
-        "startPage": "/login",
-        "useCookie": false
-      },
-      "parallelSafe": true
-    }
-  }
-}
-```
+Prompt mode is good for exploration. For repeatable checks, save the instructions in a scenario file.
 
-Create a scenario file such as `user-scenarios/login.scenario.md`:
+Create `user-scenarios/login.scenario.md`:
 
 ```md
 ---
@@ -79,47 +106,100 @@ Use the seeded student account.
 Run it:
 
 ```bash
-qazy user-scenarios/login
+qazy user-scenarios/login \
+  --email student@example.com --password secret123
 ```
 
-Ad hoc prompt mode works when you want a quick one-off check instead of a checked-in scenario:
+Run one scenario, a directory, or a glob:
 
 ```bash
-qazy -p "test login flow for student" --start-page /login --no-use-cookie
+qazy user-scenarios/login
+qazy batch user-scenarios
+qazy "user-scenarios/**/*.scenario.md" --parallel
 ```
+
+## Add Project Defaults
+
+For repeated use, named environments, and checked-in team defaults, add `qazy.config.jsonc` or `qazy.config.json` to the target project.
+
+You can generate a commented config with every supported option shown:
+
+```bash
+qazy init
+```
+
+A compact strict-JSON config can look like:
+
+```json
+{
+  "version": 1,
+  "defaultTarget": "local",
+  "defaultRuntime": "codex",
+  "resultsDir": ".qazy/results",
+  "logsDir": ".qazy/logs",
+  "targets": {
+    "local": {
+      "mode": "managed",
+      "baseUrl": "http://localhost:{appPort}",
+      "devCommand": "pnpm dev",
+      "ports": {
+        "appPort": "auto"
+      },
+      "env": {
+        "PORT": "{appPort}"
+      },
+      "scenarioDefaults": {
+        "startPage": "/login",
+        "useCookie": false
+      },
+      "runtimeDefaults": {
+        "codex": {
+          "model": "gpt-5.4-mini",
+          "reasoningEffort": "low"
+        },
+        "claude": {
+          "model": "claude-sonnet-4-5"
+        }
+      },
+      "parallelSafe": true
+    }
+  }
+}
+```
+
+With that config, a scenario can be run with fewer flags:
+
+```bash
+qazy user-scenarios/login \
+  --email student@example.com --password secret123
+```
+
+## Core Concepts
+
+Prompt mode runs one ad hoc check from `-p` or `--prompt`. Use it for exploration, smoke checks, or trying Qazy against a new app.
+
+Scenario files are checked-in markdown files that make a flow repeatable. Use them for team workflows and regression checks.
+
+Targets tell Qazy where the app is. An `attached` target points at an already-running app. A `managed` target starts `devCommand`, waits for the app to respond, runs the check, then stops the process.
+
+Runtimes are the agent CLIs that drive the browser. Qazy currently supports [Claude Code](https://code.claude.com/docs/en/overview) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), and [OpenCode](https://opencode.ai/) (`opencode`).
+
+Authentication can be handled by Qazy's built-in cookie flow with `--use-cookie`, or by the runtime interacting with the login page in the browser with `--no-use-cookie`.
 
 ## Commands
 
-Scenario execution:
+Common commands:
 
 ```bash
+qazy -p "verify the student can submit an assignment"
 qazy user-scenarios/login
-qazy "user-scenarios/**/*.scenario.md" --parallel
 qazy run user-scenarios/login
 qazy batch user-scenarios
-qazy -p "verify the student can submit an assignment"
-```
-
-Useful options for runs:
-
-- `--project-root` to point Qazy at another workspace
-- `--config-file` to use a non-default config path
-- `--target` to pick a named target
-- `--base-url` to run without `qazy.config.json` against an existing app URL
-- `--runtime` to choose `claude`, `codex`, or `opencode`
-- `--model` and `--reasoning-effort` to forward runtime-specific tuning
-- `--email`, `--password`, `--start-page`, `--use-cookie`, `--no-use-cookie` to override scenario values
-- `--headed` or `--headless` to control browser visibility
-- `--screenshot-strategy` with `none`, `error`, `single`, or `checkpoints`
-- `--results-dir` and `--logs-dir` to override output paths
-- `--parallel` and `--max-workers` for batch execution
-
-Other commands:
-
-```bash
+qazy "user-scenarios/**/*.scenario.md" --parallel
 qazy tokens
 qazy tokens .qazy/logs/claude-login.log
 qazy init
+qazy config check
 qazy rename-scenarios --write
 qazy runtimes
 qazy runtimes --smoke
@@ -129,36 +209,52 @@ qazy help config
 qazy help auth
 ```
 
-What they do:
+Useful run options:
+
+- `--project-root` points Qazy at another workspace
+- `--config-file` uses a non-default config path
+- `--target` picks a named target
+- `--base-url` runs without a config file against an existing app URL
+- `--dev-command` starts a managed app without requiring a config file
+- `--runtime` chooses `claude`, `codex`, or `opencode`
+- `--model` and `--reasoning-effort` forward runtime-specific tuning
+- `--email`, `--password`, `--start-page`, `--use-cookie`, `--no-use-cookie` override scenario values
+- `--headed` or `--headless` controls browser visibility
+- `--screenshot-strategy` accepts `none`, `error`, `single`, or `checkpoints`
+- `--results-dir` and `--logs-dir` override output paths
+- `--parallel` and `--max-workers` control batch execution
+
+Other command behavior:
 
 - `qazy tokens` summarizes usage from runtime log files
-- `qazy init` writes a starter `qazy.config.example.json`
+- `qazy init` writes `qazy.config.jsonc` with every supported config field and optional values commented out
+- `qazy config check` validates `qazy.config.jsonc` or `qazy.config.json`; strict JSON files are also checked for canonical two-space formatting
 - `qazy rename-scenarios` migrates legacy scenario layouts to `*.scenario.md`
 - `qazy runtimes` checks which runtime CLIs are available
 - `qazy runtimes --smoke` sends a trivial prompt through each installed runtime
 - `qazy help [topic]` prints agent-friendly usage guidance without needing this README
 
-## Config
+## Configuration Reference
 
-`qazy.config.json` is optional. Qazy looks for it in `--project-root`, but if it is missing Qazy can still run with a built-in default target:
+Config is optional. Qazy looks for `qazy.config.json` first, then `qazy.config.jsonc` in `--project-root`, but if both are missing Qazy can still run with the built-in defaults described in Quick Start.
 
-- no config and no target flags: attached `http://127.0.0.1:3000`
-- no config and `--base-url URL`: attached `URL`
-- no config and `--dev-command "..."`: managed `http://127.0.0.1:{appPort}` with `PORT={appPort}`
+`qazy init` writes `qazy.config.jsonc` by default. JSONC comments and trailing commas are supported so the generated file can show optional settings inline while remaining loadable by Qazy.
 
-If `qazy.config.json` is absent and `qazy.config.example.json` exists, Qazy no longer requires you to copy it before running. The config file is still the recommended way to store shared target definitions.
-
-You can scaffold a starter template with:
+Check a config before a run or in CI:
 
 ```bash
-qazy init
+qazy config check
+qazy config check --config-file qazy.config.jsonc
+qazy config check --schema-only
 ```
 
 Top-level fields:
 
 - `version`: currently `1`
 - `defaultTarget`: target used when `--target` is omitted
-- `resultsDir`: default results directory
+- `defaultRuntime`: runtime used when `--runtime` is omitted, one of `claude`, `codex`, or `opencode`
+- `resultsDir`: default results directory; Qazy defaults to `.qazy/results`
+- `logsDir`: default log directory; Qazy defaults to `.qazy/logs`
 - `targets`: named target definitions
 
 Target fields:
@@ -171,6 +267,7 @@ Target fields:
 - `ready`: HTTP readiness probe with `type`, `path`, and `timeoutSeconds`
 - `parallelSafe`: required for batch `--parallel`
 - `scenarioDefaults`: default `email`, `password`, `startPage`, and `useCookie`
+- `runtimeDefaults`: default runtime `model` and `reasoningEffort` by runtime name, such as `codex` or `claude`
 
 Target behavior:
 
@@ -179,12 +276,16 @@ Target behavior:
 
 Notes:
 
-- Relative `resultsDir` values resolve from the config file location
+- Relative `resultsDir` and `logsDir` values resolve from the config file location
+- If `resultsDir` is omitted, results default to `<project-root>/.qazy/results/`
+- If `logsDir` is omitted, logs default to `<project-root>/.qazy/logs/`
+- `--runtime` overrides `defaultRuntime`
+- `--model` and `--reasoning-effort` override `runtimeDefaults`
 - Runtime logs default to `<project-root>/.qazy/logs/`
 - If `<project-root>/qazy/logs/` already exists and `.qazy/logs/` does not, Qazy keeps using the legacy path
 - `ready.type` currently only supports `http`
 
-## Scenario Format
+## Scenario Reference
 
 Frontmatter fields:
 
@@ -192,8 +293,8 @@ Frontmatter fields:
 - `password`
 - `start_page`
 - `use_cookie`
-- `auth_provider` — `nextauth` (default) or `better-auth`
-- `auth_cookie_prefix` — Better Auth cookie prefix override (default `better-auth`)
+- `auth_provider`: `nextauth` (default) or `better-auth`
+- `auth_cookie_prefix`: Better Auth cookie prefix override, default `better-auth`
 
 Single-section scenarios are the common case. Multi-section scenarios work by repeating the frontmatter block:
 
@@ -230,21 +331,21 @@ Value precedence is:
 3. Target `scenarioDefaults`
 4. Built-in defaults
 
-Built-in defaults are `start_page: /dashboard` and `use_cookie: true`. Credentials may be omitted when `use_cookie` resolves to `false`, or when they are supplied by `scenarioDefaults` or CLI overrides.
+Built-in defaults are `start_page: /dashboard` and `use_cookie: true`. Built-in cookie auth requires both `email` and `password`; browser-driven login with `use_cookie: false` can run without credentials.
 
-## Authentication
+## Authentication Reference
 
 Qazy has built-in credentials-cookie login, controlled by `use_cookie` plus `auth_provider`.
 
-- `use_cookie: true`, `auth_provider: nextauth` (default): Qazy requests `/api/auth/csrf`, posts form-encoded credentials to `/api/auth/callback/credentials`, captures the `next-auth.session-token` cookie, and injects it into `agent-browser`.
-- `use_cookie: true`, `auth_provider: better-auth`: Qazy posts JSON credentials to `/api/auth/sign-in/email` with a matching `Origin` header, captures the `better-auth.session_token` cookie (or `__Secure-better-auth.session_token` on HTTPS), and injects it into `agent-browser`. Override the cookie prefix via `auth_cookie_prefix` if your server customizes Better Auth's `advanced.cookiePrefix`.
-- `use_cookie: false`: Qazy does no pre-authentication. The runtime logs in manually in the browser.
+- `use_cookie: true`, `auth_provider: nextauth` (default): Qazy requests `/api/auth/csrf`, posts form-encoded credentials to `/api/auth/callback/credentials`, captures the `next-auth.session-token` cookie, and injects it into `agent-browser`
+- `use_cookie: true`, `auth_provider: better-auth`: Qazy posts JSON credentials to `/api/auth/sign-in/email` with a matching `Origin` header, captures the `better-auth.session_token` cookie or `__Secure-better-auth.session_token` on HTTPS, and injects it into `agent-browser`
+- `use_cookie: false`: Qazy does no pre-authentication. The runtime logs in manually in the browser when credentials are provided. If credentials are omitted, Qazy prints that on startup and instructs the runtime not to search files, environment variables, source code, logs, or config for them.
 
 Credential and provider sources, in precedence order:
 
 1. CLI overrides: `--email`, `--password`, `--auth-provider`, `--auth-cookie-prefix`
 2. Scenario frontmatter
-3. Target `scenarioDefaults` (`email`, `password`, `authProvider`, `authCookiePrefix`, …)
+3. Target `scenarioDefaults`: `email`, `password`, `authProvider`, `authCookiePrefix`, and related auth fields
 
 Custom auth flows still work, but they are runtime-driven browser flows rather than built-in Qazy auth. That includes SSO, OAuth redirects, magic links, MFA, and custom login forms.
 
@@ -261,7 +362,7 @@ During a run, Qazy exposes `qazy-shot <label>` to the runtime so it can save scr
 
 Outputs:
 
-- results markdown: `<resultsDir>/<run-id>/`
+- results markdown: `<resultsDir>/<run-id>/`, defaulting to `<project-root>/.qazy/results/<run-id>/`
 - screenshots: `<resultsDir>/<run-id>/screenshots/`
 - runtime logs: `<project-root>/.qazy/logs/` by default
 - exit code: `0` on pass, `1` on fail or error
@@ -270,31 +371,11 @@ Outputs:
 
 Supported runtime adapters today:
 
-- `claude`
-- `codex`
-- `opencode`
+- [Claude Code](https://code.claude.com/docs/en/overview) (`claude`)
+- [Codex CLI](https://developers.openai.com/codex/cli) (`codex`)
+- [OpenCode](https://opencode.ai/) (`opencode`)
 
 Use `qazy runtimes` to check installation and `qazy runtimes --smoke` to verify a trivial invocation works in the current environment.
-
-## Tests
-
-Qazy now has three test tiers plus an aggregate target:
-
-```bash
-make test-unit
-make test-runtime-integration
-make test-example-integration
-make test-all
-```
-
-What each tier covers:
-
-- `test-unit`: pure unit coverage plus mocked CLI and runner behavior
-- `test-runtime-integration`: runs the live runtime smoke tests in `tests/test_live_runtimes.py`
-- `test-example-integration`: runs the repo-local example app integration tests in `tests/test_examples.py`
-- `test-all`: runs every tier
-
-The live runtime tests are intentionally skipped unless the relevant runtime CLI is installed locally.
 
 ## Examples
 
@@ -304,6 +385,34 @@ Repo-local example apps live under `examples/`:
 - `examples/task-board`
 
 Each example includes a lightweight HTML app, a `qazy.config.json`, and scenario files you can run directly. See `examples/README.md` for commands.
+
+## Development
+
+Run the mocked unit and CLI suite:
+
+```bash
+make test-unit
+```
+
+Run live runtime integration coverage:
+
+```bash
+make test-runtime-integration
+```
+
+Run the example-app integration coverage:
+
+```bash
+make test-example-integration
+```
+
+Run every test tier:
+
+```bash
+make test-all
+```
+
+The live runtime tests are intentionally skipped unless the relevant runtime CLI is installed locally.
 
 ## Limitations
 
