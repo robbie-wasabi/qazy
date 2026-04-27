@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import glob
+from importlib.metadata import PackageNotFoundError, version as package_version
 import shlex
+import shutil
+import subprocess
 import sys
 import textwrap
+import tomllib
 from pathlib import Path
 
 from .config import (
@@ -30,6 +34,7 @@ HELP_TOPICS = {
     "run",
     "batch",
     "init",
+    "setup",
     "scenario",
     "prompt",
     "tokens",
@@ -40,6 +45,22 @@ HELP_TOPICS = {
     "auth",
     "limitations",
 }
+
+
+def get_version() -> str:
+    try:
+        return package_version("qazy")
+    except PackageNotFoundError:
+        pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+        try:
+            payload = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError):
+            return "unknown"
+        project = payload.get("project")
+        if not isinstance(project, dict):
+            return "unknown"
+        value = project.get("version")
+        return value if isinstance(value, str) else "unknown"
 
 
 def build_main_help() -> str:
@@ -54,6 +75,8 @@ def build_main_help() -> str:
         Usage:
           qazy <scenario-path|dir|glob> [options]
           qazy -p "ad hoc prompt" [options]
+          qazy --version
+          qazy setup [options]
           qazy init [options]
           qazy config check [options]
           qazy tokens [logs...] [options]
@@ -68,6 +91,7 @@ def build_main_help() -> str:
 
         Core Flows:
           qazy init
+          qazy setup
           qazy user-scenarios/login
           qazy user-scenarios/login --base-url http://127.0.0.1:3000
           qazy "user-scenarios/**/*.scenario.md" --parallel
@@ -144,6 +168,7 @@ def build_main_help() -> str:
 
         Help Topics:
           qazy help init
+          qazy help setup
           qazy help run
           qazy help config
           qazy help auth
@@ -243,6 +268,25 @@ def build_init_help_epilog() -> str:
           - Writes qazy.config.jsonc by default.
           - Includes every supported config field, with optional fields commented out.
           - The generated file is a usable config; edit and uncomment only what you need.
+        """
+    ).rstrip()
+
+
+def build_setup_help_epilog() -> str:
+    return textwrap.dedent(
+        """\
+        Examples:
+          qazy setup
+          qazy setup --runtime codex
+          qazy setup --runtime claude --project-root ../my-app
+
+        Notes:
+          - Starts Claude Code or Codex with Qazy's install prompt.
+          - When --runtime is omitted, Qazy asks which setup agent to use.
+          - The selected agent reviews the target project and creates or patches
+            qazy.config.jsonc after asking the user setup questions.
+          - Qazy passes the install prompt as the initial prompt argument so the
+            agent can keep using the terminal for follow-up interaction.
         """
     ).rstrip()
 
@@ -450,6 +494,9 @@ def print_help_topic(topic: str) -> int:
     if topic == "init":
         build_init_parser().print_help()
         return 0
+    if topic == "setup":
+        build_setup_parser().print_help()
+        return 0
     if topic in {"run", "batch"}:
         build_scenario_parser(prog=f"qazy {topic}").print_help()
         return 0
@@ -522,6 +569,27 @@ def build_init_parser() -> argparse.ArgumentParser:
     parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root")
     parser.add_argument("--output", type=Path, help="Output path, relative to --project-root by default")
     parser.add_argument("--force", action="store_true", help="Overwrite the output file if it already exists")
+    return parser
+
+
+def build_setup_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="qazy setup",
+        description="Launch an agent to install or update Qazy config for a project.",
+        epilog=build_setup_help_epilog(),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root to set up")
+    parser.add_argument(
+        "--runtime",
+        choices=["claude", "codex"],
+        help="Setup agent to launch; omit to choose interactively",
+    )
+    parser.add_argument(
+        "--prompt-file",
+        type=Path,
+        help="Override the install prompt file, relative to --project-root by default",
+    )
     return parser
 
 
@@ -775,6 +843,105 @@ def run_config_check(args: argparse.Namespace) -> int:
     return 0
 
 
+SETUP_RUNTIME_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+}
+
+
+def resolve_setup_prompt_file(project_root: Path, prompt_file: Path | None) -> Path:
+    if prompt_file is not None:
+        path = prompt_file.expanduser()
+        if not path.is_absolute():
+            path = (project_root / path).resolve()
+        else:
+            path = path.resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Setup prompt not found: {path}")
+        return path
+
+    candidates = [
+        (Path(__file__).resolve().parent.parent / "INSTALL_PROMPT.md").resolve(),
+        (Path(__file__).resolve().parent / "INSTALL_PROMPT.md").resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError("Setup prompt not found. Expected INSTALL_PROMPT.md in the Qazy install.")
+
+
+def read_setup_prompt(project_root: Path, prompt_file: Path | None) -> str:
+    path = resolve_setup_prompt_file(project_root, prompt_file)
+    prompt = path.read_text(encoding="utf-8")
+    if not prompt.strip():
+        raise RuntimeError(f"Setup prompt is empty: {path}")
+    return prompt
+
+
+def prompt_for_setup_runtime() -> str:
+    print("Choose a setup agent:")
+    for index, runtime_name in enumerate(("claude", "codex"), start=1):
+        executable = shutil.which(runtime_name)
+        status = f"found at {executable}" if executable else "not found on PATH"
+        print(f"  {index}. {SETUP_RUNTIME_LABELS[runtime_name]} ({runtime_name}) - {status}")
+
+    choices = {
+        "1": "claude",
+        "claude": "claude",
+        "claude code": "claude",
+        "2": "codex",
+        "codex": "codex",
+    }
+    while True:
+        try:
+            answer = input("Use Claude Code or Codex? [claude/codex]: ").strip().lower()
+        except EOFError as exc:
+            raise RuntimeError("qazy setup requires --runtime when input is not interactive") from exc
+        if answer in choices:
+            return choices[answer]
+        print("Please enter claude, codex, 1, or 2.")
+
+
+def build_setup_command(runtime_name: str, project_root: Path, prompt: str) -> list[str]:
+    if runtime_name == "claude":
+        return ["claude", prompt]
+    if runtime_name == "codex":
+        return ["codex", "-C", str(project_root), prompt]
+    raise RuntimeError(f"Unsupported setup runtime: {runtime_name}")
+
+
+def run_setup(args: argparse.Namespace) -> int:
+    project_root = args.project_root.expanduser().resolve()
+    if not project_root.is_dir():
+        print(f"Setup failed: project root not found: {project_root}")
+        return 1
+    try:
+        prompt = read_setup_prompt(project_root, args.prompt_file)
+    except (FileNotFoundError, OSError, RuntimeError) as exc:
+        print(f"Setup failed: {exc}")
+        return 1
+
+    try:
+        runtime_name = args.runtime or prompt_for_setup_runtime()
+    except RuntimeError as exc:
+        print(f"Setup failed: {exc}")
+        return 2
+
+    executable = shutil.which(runtime_name)
+    if executable is None:
+        label = SETUP_RUNTIME_LABELS[runtime_name]
+        print(f"Setup failed: {label} executable '{runtime_name}' was not found on PATH.")
+        return 1
+
+    print(f"Launching {SETUP_RUNTIME_LABELS[runtime_name]} to set up Qazy in {project_root}")
+    command = build_setup_command(runtime_name, project_root, prompt)
+    try:
+        return subprocess.run(command, cwd=project_root).returncode
+    except KeyboardInterrupt:
+        print("\nSetup interrupted")
+        return 130
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     if not raw_argv:
@@ -783,6 +950,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if raw_argv[0] in {"-h", "--help"}:
         print_main_help()
+        return 0
+
+    if raw_argv[0] in {"--version", "-V", "version"}:
+        print(f"qazy {get_version()}")
         return 0
 
     if raw_argv[0] == "help":
@@ -831,6 +1002,10 @@ def main(argv: list[str] | None = None) -> int:
         path = write_config_template(args.project_root, output=args.output, force=args.force)
         print(path)
         return 0
+
+    if command == "setup":
+        args = build_setup_parser().parse_args(raw_argv[1:])
+        return run_setup(args)
 
     if command == "config":
         args = build_config_parser().parse_args(raw_argv[1:])

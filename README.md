@@ -122,6 +122,19 @@ qazy "user-scenarios/**/*.scenario.md" --parallel
 
 For repeated use, named environments, and checked-in team defaults, add `qazy.config.jsonc` or `qazy.config.json` to the target project.
 
+To have an agent inspect the project and create or patch `qazy.config.jsonc`, run:
+
+```bash
+qazy setup
+```
+
+Qazy asks whether to launch Claude Code or Codex, then passes the install prompt to that agent. To skip the chooser:
+
+```bash
+qazy setup --runtime codex
+qazy setup --runtime claude
+```
+
 You can generate a commented config with every supported option shown:
 
 ```bash
@@ -198,12 +211,14 @@ qazy batch user-scenarios
 qazy "user-scenarios/**/*.scenario.md" --parallel
 qazy tokens
 qazy tokens .qazy/logs/claude-login.log
+qazy setup
 qazy init
 qazy config check
 qazy rename-scenarios --write
 qazy runtimes
 qazy runtimes --smoke
 qazy help
+qazy --version
 qazy help run
 qazy help config
 qazy help auth
@@ -227,7 +242,9 @@ Useful run options:
 Other command behavior:
 
 - `qazy tokens` summarizes usage from runtime log files
+- `qazy setup` launches Claude Code or Codex with Qazy's install prompt to set up `qazy.config.jsonc`
 - `qazy init` writes `qazy.config.jsonc` with every supported config field and optional values commented out
+- `qazy --version` prints the installed Qazy package version
 - `qazy config check` validates `qazy.config.jsonc` or `qazy.config.json`; strict JSON files are also checked for canonical two-space formatting
 - `qazy rename-scenarios` migrates legacy scenario layouts to `*.scenario.md`
 - `qazy runtimes` checks which runtime CLIs are available

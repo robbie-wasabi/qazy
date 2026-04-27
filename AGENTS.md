@@ -30,7 +30,7 @@ Run the example-app integration coverage:
 make test-example-integration
 ```
 
-Run every test tier:
+Run every test tier sparingly because it takes a long time. Reserve this for pre-merge validation, broad cross-cutting changes, or explicit requests:
 
 ```bash
 make test-all
@@ -49,6 +49,8 @@ No formatter or linter is configured in `pyproject.toml`, so keep imports tidy, 
 
 ## Testing Guidelines
 Use `unittest`, not `pytest`-specific features. Add tests next to the affected behavior in `tests/test_<area>.py`. Favor isolated temp directories, fake binaries, and `unittest.mock.patch` over real external dependencies.
+
+Prefer focused tests for the behavior you changed, such as a specific `unittest` module or `make test-unit` when the affected surface is broader. Run the full suite sparingly.
 
 Keep the suite split along these lines:
 

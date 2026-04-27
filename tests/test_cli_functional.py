@@ -1280,8 +1280,29 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn("Minimal qazy.config.jsonc", output)
         self.assertIn("Authentication:", output)
         self.assertIn("Limitations:", output)
+        self.assertIn("qazy setup", output)
         self.assertIn("qazy config check", output)
         self.assertIn("qazy help config", output)
+
+    def test_version_flag_prints_package_version(self) -> None:
+        stdout = io.StringIO()
+        with patch("qazy.cli.get_version", return_value="1.2.3"):
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(["--version"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stdout.getvalue(), "qazy 1.2.3\n")
+
+    def test_help_setup_describes_agent_choice(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            exit_code = main(["help", "setup"])
+
+        self.assertEqual(exit_code, 0)
+        output = stdout.getvalue()
+        self.assertIn("qazy setup", output)
+        self.assertIn("--runtime {claude,codex}", output)
+        self.assertIn("Claude Code or Codex", output)
 
     def test_help_run_includes_scenario_format_guidance(self) -> None:
         stdout = io.StringIO()
@@ -1373,6 +1394,7 @@ class QazyCliFunctionalTests(unittest.TestCase):
         output = stdout.getvalue()
         self.assertIn("Unknown help topic: wat", output)
         self.assertIn("Available topics:", output)
+        self.assertIn("setup", output)
         self.assertIn("rename-scenarios", output)
 
     def test_init_command_writes_commented_config(self) -> None:
@@ -1392,6 +1414,59 @@ class QazyCliFunctionalTests(unittest.TestCase):
         self.assertIn('"scenarioDefaults"', content)
         self.assertIn('"runtimeDefaults"', content)
         self.assertIn(str(config_path), stdout.getvalue())
+
+    def test_setup_launches_codex_with_install_prompt(self) -> None:
+        prompt_path = self.root / "setup-prompt.md"
+        prompt_path.write_text("Set up `qazy.config.jsonc` for this project.", encoding="utf-8")
+        completed = SimpleNamespace(returncode=0)
+
+        stdout = io.StringIO()
+        with patch("qazy.cli.subprocess.run", return_value=completed) as run:
+            with contextlib.redirect_stdout(stdout):
+                exit_code = main(
+                    [
+                        "setup",
+                        "--project-root",
+                        str(self.root),
+                        "--runtime",
+                        "codex",
+                        "--prompt-file",
+                        "setup-prompt.md",
+                    ]
+                )
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once_with(
+            ["codex", "-C", str(self.root.resolve()), "Set up `qazy.config.jsonc` for this project."],
+            cwd=self.root.resolve(),
+        )
+        self.assertIn("Launching Codex", stdout.getvalue())
+
+    def test_setup_asks_for_runtime_when_omitted(self) -> None:
+        prompt_path = self.root / "setup-prompt.md"
+        prompt_path.write_text("Set up Qazy.", encoding="utf-8")
+        completed = SimpleNamespace(returncode=0)
+
+        stdout = io.StringIO()
+        with patch("builtins.input", return_value="1"):
+            with patch("qazy.cli.subprocess.run", return_value=completed) as run:
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = main(
+                        [
+                            "setup",
+                            "--project-root",
+                            str(self.root),
+                            "--prompt-file",
+                            "setup-prompt.md",
+                        ]
+                    )
+
+        self.assertEqual(exit_code, 0)
+        run.assert_called_once_with(["claude", "Set up Qazy."], cwd=self.root.resolve())
+        output = stdout.getvalue()
+        self.assertIn("Choose a setup agent:", output)
+        self.assertIn("Claude Code", output)
+        self.assertIn("Codex", output)
 
     def test_run_multi_section_shared_server_all_pass(self) -> None:
         self.write_scenario(
