@@ -1,0 +1,39 @@
+name: Bump Homebrew Formula
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish (e.g. v0.2.0)"
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bump formula in robbie-wasabi/homebrew-qazy
+        uses: mislav/bump-homebrew-formula-action@v3
+        with:
+          formula-name: qazy
+          formula-path: Formula/qazy.rb
+          homebrew-tap: robbie-wasabi/homebrew-qazy
+          tag-name: ${{ steps.tag.outputs.name }}
+          download-url: https://github.com/robbie-wasabi/qazy/archive/refs/tags/${{ steps.tag.outputs.name }}.tar.gz
+          commit-message: |
+            qazy {{version}}
+
+            Created by https://github.com/mislav/bump-homebrew-formula-action
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

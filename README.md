@@ -6,13 +6,20 @@ Use Qazy when you want a browser agent to walk through user-facing flows such as
 
 ## Install
 
-For development from this repo:
+With Homebrew:
+
+```bash
+brew tap robbie-wasabi/qazy
+brew install qazy
+```
+
+For development from a clone of this repo:
 
 ```bash
 make install
 ```
 
-To install the CLI so `qazy` is available outside this repo:
+To install the CLI from a clone so `qazy` is available outside the repo:
 
 ```bash
 pipx install --editable .
