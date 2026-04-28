@@ -27,7 +27,6 @@ from .config import (
     DEFAULT_AUTH_BASE_PATH,
     DEFAULT_AUTH_PROVIDER,
     DEFAULT_BETTER_AUTH_COOKIE_PREFIX,
-    DEFAULT_LOGS_DIR,
     DEFAULT_RESULTS_DIR,
     ReadyCheck,
     ResolvedTarget,
@@ -115,7 +114,6 @@ class Workspace:
     project_root: Path
     scenarios_dir: Path
     results_dir: Path
-    logs_dir: Path
 
 
 @dataclass(frozen=True)
@@ -220,20 +218,17 @@ def workspace_from_root(
     *,
     scenarios_dir: Path | None = None,
     results_dir: Path | None = None,
-    logs_dir: Path | None = None,
 ) -> Workspace:
     root = project_root.resolve()
-    default_logs_dir = (root / DEFAULT_LOGS_DIR).resolve()
-    legacy_logs_dir = (root / "qazy" / "logs").resolve()
-    resolved_logs_dir = logs_dir.resolve() if logs_dir is not None else default_logs_dir
-    if logs_dir is None and legacy_logs_dir.exists() and not default_logs_dir.exists():
-        resolved_logs_dir = legacy_logs_dir
     return Workspace(
         project_root=root,
         scenarios_dir=(scenarios_dir or (root / "user-scenarios")).resolve(),
         results_dir=(results_dir or (root / DEFAULT_RESULTS_DIR)).resolve(),
-        logs_dir=resolved_logs_dir,
     )
+
+
+def logs_dir_for_results(results_dir: Path) -> Path:
+    return results_dir / "logs"
 
 
 def generate_run_id() -> str:
@@ -677,6 +672,7 @@ def start_managed_target(
     workspace: Workspace,
     target: ResolvedTarget,
     *,
+    logs_dir: Path,
     prefix: str = "",
     color: str = "",
 ) -> subprocess.Popen[str]:
@@ -686,7 +682,7 @@ def start_managed_target(
     env = {**os.environ, **target.env}
 
     log_suffix = str(target.app_port) if target.app_port is not None else slugify(target.name)
-    server_log = workspace.logs_dir / f"server-{log_suffix}-{int(time.time())}.log"
+    server_log = logs_dir / f"server-{log_suffix}-{int(time.time())}.log"
     server_log.parent.mkdir(parents=True, exist_ok=True)
 
     details: list[str] = []
@@ -1324,7 +1320,9 @@ def _run_single_section(
     session_name = browser_session_name(run_id, scenario.path, section.index if multi else None)
     section_suffix = f"-s{section.index}" if multi else ""
     section_prefix = f"{prefix}:{section.label}" if multi else prefix
-    log_path = workspace.logs_dir / f"{runtime.name}-{scenario.path.replace('/', '-')}{section_suffix}-{int(time.time())}.log"
+    log_path = logs_dir_for_results(results_dir) / (
+        f"{runtime.name}-{scenario.path.replace('/', '-')}{section_suffix}-{int(time.time())}.log"
+    )
     results_file = results_dir / f"{scenario.path.replace('/', '--')}{section_suffix}.md"
     usage_totals: UsageTotals | None = None
     screenshots: tuple[Path, ...] = ()
@@ -1578,9 +1576,10 @@ def _run_prepared_scenario(
     prefix = scenario.path.replace("/", ":")
     color = color_for_index(0)
     results_dir = workspace.results_dir / actual_run_id
+    logs_dir = logs_dir_for_results(results_dir)
 
     server: subprocess.Popen[str] | None = None
-    log_path = workspace.logs_dir / f"{runtime.name}-{scenario.path.replace('/', '-')}-{int(time.time())}.log"
+    log_path = logs_dir / f"{runtime.name}-{scenario.path.replace('/', '-')}-{int(time.time())}.log"
     results_file = results_dir / f"{scenario.path.replace('/', '--')}.md"
 
     log(f"Scenario:   {scenario.path}")
@@ -1621,7 +1620,7 @@ def _run_prepared_scenario(
             )
 
         if resolved_target.mode == "managed":
-            server = start_managed_target(workspace, resolved_target, prefix=prefix, color=color)
+            server = start_managed_target(workspace, resolved_target, logs_dir=logs_dir, prefix=prefix, color=color)
         wait_for_target_ready(
             base_url,
             resolved_target.ready,
@@ -1780,6 +1779,7 @@ def _run_multi_section(
     section_results: list[ScenarioRunResult] = []
     server_error: str | None = None
     base_url = target.base_url
+    logs_dir = logs_dir_for_results(results_dir)
 
     log(f"Scenario:   {scenario.path} ({len(scenario.sections)} sections)")
     log(f"Scenario file: {scenario.file_path}")
@@ -1799,7 +1799,7 @@ def _run_multi_section(
 
     try:
         if target.mode == "managed":
-            server = start_managed_target(workspace, target, prefix=prefix, color=color)
+            server = start_managed_target(workspace, target, logs_dir=logs_dir, prefix=prefix, color=color)
         wait_for_target_ready(
             base_url,
             target.ready,
@@ -1858,7 +1858,7 @@ def _run_multi_section(
             runtime=runtime.name,
             base_url=base_url,
             results_file=combined_file,
-            log_file=workspace.logs_dir / "empty.log",
+            log_file=logs_dir / "empty.log",
             final_report="",
             report_summary=summary,
             status="error",

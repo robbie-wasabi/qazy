@@ -23,10 +23,9 @@ to a working `qazy.config.jsonc` as fast as possible.
    Make clear they can skip this; omit credentials when they decline or do not
    provide both values.
 5. Patch the config, run `qazy config check`, and show the user the result.
-6. Add the effective Qazy output directories to `.gitignore`. Use the config's
-   `resultsDir` and `logsDir` values when present; otherwise add the defaults
-   `.qazy/results/` and `.qazy/logs/`. Preserve existing `.gitignore` content
-   and avoid duplicate entries.
+6. Add the effective Qazy output directory to `.gitignore`. Use the config's
+   `resultsDir` value when present; otherwise add the default `.qazy/results/`.
+   Preserve existing `.gitignore` content and avoid duplicate entries.
 7. If something genuinely can't be inferred besides optional credentials, ask
    one short question and patch the config.
 
@@ -50,7 +49,7 @@ test.
 - **Auth:** `useCookie: false` unless the app is obviously NextAuth or
   Better Auth with credentials login. Ask whether to add safe test fallback
   credentials in `scenarioDefaults`, but leave credentials out by default.
-- **Outputs:** omit `resultsDir` / `logsDir` — defaults are fine.
+- **Outputs:** omit `resultsDir` — the default is fine.
 - **`parallelSafe`:** `false` unless the target is clearly isolated.
 
 ## Hard rules
@@ -62,13 +61,12 @@ test.
   prompt text are CLI flags, not config fields.
 - Don't run `qazy runtimes --smoke` or a Qazy browser test without asking —
   those can invoke paid model CLIs.
-- Do update `.gitignore` so Qazy-generated result and log directories are not
-  committed.
+- Do update `.gitignore` so Qazy-generated result directories are not committed.
 
 ## Config cheat sheet
 
 Top-level: `version` (1), `defaultTarget`, `defaultRuntime`
-(`claude` | `codex` | `opencode`), `resultsDir`, `logsDir`, `targets`.
+(`claude` | `codex` | `opencode`), `resultsDir`, `targets`.
 
 Target: `mode` (`managed` | `attached`), `baseUrl`, `devCommand` (managed
 only), `ports` (`appPort`, `mongoPort` — int or `"auto"`), `env`, `ready`,

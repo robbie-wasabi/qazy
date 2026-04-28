@@ -149,7 +149,6 @@ A compact strict-JSON config can look like:
   "defaultTarget": "local",
   "defaultRuntime": "codex",
   "resultsDir": ".qazy/results",
-  "logsDir": ".qazy/logs",
   "targets": {
     "local": {
       "mode": "managed",
@@ -210,7 +209,7 @@ qazy run user-scenarios/login
 qazy batch user-scenarios
 qazy "user-scenarios/**/*.scenario.md" --parallel
 qazy tokens
-qazy tokens .qazy/logs/claude-login.log
+qazy tokens .qazy/results/my-run/logs/claude-login.log
 qazy setup
 qazy init
 qazy config check
@@ -236,7 +235,7 @@ Useful run options:
 - `--email`, `--password`, `--start-page`, `--use-cookie`, `--no-use-cookie` override scenario values
 - `--headed` or `--headless` controls browser visibility
 - `--screenshot-strategy` accepts `none`, `error`, `single`, or `checkpoints`
-- `--results-dir` and `--logs-dir` override output paths
+- `--results-dir` overrides the output path
 - `--parallel` and `--max-workers` control batch execution
 
 Other command behavior:
@@ -270,8 +269,7 @@ Top-level fields:
 - `version`: currently `1`
 - `defaultTarget`: target used when `--target` is omitted
 - `defaultRuntime`: runtime used when `--runtime` is omitted, one of `claude`, `codex`, or `opencode`
-- `resultsDir`: default results directory; Qazy defaults to `.qazy/results`
-- `logsDir`: default log directory; Qazy defaults to `.qazy/logs`
+- `resultsDir`: default directory for result markdown, screenshots, and logs; Qazy defaults to `.qazy/results`
 - `targets`: named target definitions
 
 Target fields:
@@ -293,13 +291,11 @@ Target behavior:
 
 Notes:
 
-- Relative `resultsDir` and `logsDir` values resolve from the config file location
+- Relative `resultsDir` values resolve from the config file location
 - If `resultsDir` is omitted, results default to `<project-root>/.qazy/results/`
-- If `logsDir` is omitted, logs default to `<project-root>/.qazy/logs/`
 - `--runtime` overrides `defaultRuntime`
 - `--model` and `--reasoning-effort` override `runtimeDefaults`
-- Runtime logs default to `<project-root>/.qazy/logs/`
-- If `<project-root>/qazy/logs/` already exists and `.qazy/logs/` does not, Qazy keeps using the legacy path
+- Runtime and server logs are written to `<resultsDir>/<run-id>/logs/`
 - `ready.type` currently only supports `http`
 
 ## Scenario Reference
@@ -381,7 +377,7 @@ Outputs:
 
 - results markdown: `<resultsDir>/<run-id>/`, defaulting to `<project-root>/.qazy/results/<run-id>/`
 - screenshots: `<resultsDir>/<run-id>/screenshots/`
-- runtime logs: `<project-root>/.qazy/logs/` by default
+- runtime and server logs: `<resultsDir>/<run-id>/logs/`
 - exit code: `0` on pass, `1` on fail or error
 
 ## Runtime Support

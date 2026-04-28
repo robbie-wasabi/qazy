@@ -16,7 +16,9 @@ from pathlib import Path
 from .config import (
     AUTH_PROVIDERS,
     DEFAULT_RUNTIME,
+    DEFAULT_SCREENSHOT_STRATEGY,
     DEFAULT_TARGET_NAME,
+    SCREENSHOT_STRATEGIES,
     TargetDefinition,
     build_default_target,
     config_file_is_formatted,
@@ -112,7 +114,7 @@ def build_main_help() -> str:
           --auth-cookie-prefix           Better Auth cookie prefix override
           --headed/--headless            Control browser visibility
           --screenshot-strategy          none | error | single | checkpoints
-          --results-dir / --logs-dir     Override output locations
+          --results-dir                  Override output location
           --parallel / --max-workers     Batch execution controls
 
         Minimal qazy.config.jsonc:
@@ -121,7 +123,6 @@ def build_main_help() -> str:
             "defaultTarget": "local",
             "defaultRuntime": "codex",
             "resultsDir": ".qazy/results",
-            "logsDir": ".qazy/logs",
             "targets": {{
               "local": {{
                 "mode": "managed",
@@ -156,8 +157,7 @@ def build_main_help() -> str:
           use_cookie=false  runtime logs in manually in the browser when credentials are provided
 
         Outputs:
-          results markdown   .qazy/results/<run-id>/ by default
-          runtime logs       .qazy/logs/ by default
+          results and logs   .qazy/results/<run-id>/ by default
           exit code          0 on pass, 1 on fail/error
 
         Limitations:
@@ -232,7 +232,7 @@ def build_scenario_help_epilog() -> str:
 
         Outputs:
           - results markdown under .qazy/results/<run-id>/ by default
-          - runtime logs under .qazy/logs/
+          - runtime and server logs under .qazy/results/<run-id>/logs/
           - exit code 0 on pass, 1 on fail/error
 
         Limitation:
@@ -247,11 +247,12 @@ def build_tokens_help_epilog() -> str:
         """\
         Examples:
           qazy tokens
-          qazy tokens .qazy/logs/claude-login.log .qazy/logs/codex-flow.log
+          qazy tokens .qazy/results/my-run/logs/claude-login.log
 
         Notes:
           - Reads runtime logs, not result markdown files.
-          - Skips server-*.log files by default.
+          - With no log paths, scans resultsDir recursively and skips server-*.log files.
+          - If a config file exists, its resultsDir is used unless --results-dir is passed.
         """
     ).rstrip()
 
@@ -356,7 +357,6 @@ def build_config_help() -> str:
           defaultTarget   target used when --target is omitted
           defaultRuntime  runtime used when --runtime is omitted
           resultsDir      optional default results directory; default .qazy/results
-          logsDir         optional default log directory; default .qazy/logs
           targets         named target definitions
 
         Target Fields:
@@ -401,10 +401,10 @@ def build_config_help() -> str:
             CLI overrides > scenario frontmatter > target.scenarioDefaults > built-in defaults
 
         Notes:
-          - resultsDir and logsDir are resolved relative to the config file when relative
+          - resultsDir is resolved relative to the config file when relative
           - --runtime overrides defaultRuntime
           - --model and --reasoning-effort override target.runtimeDefaults
-          - logs default to .qazy/logs/, with legacy qazy/logs/ still honored if present
+          - logs are written under each run's results directory
           - ready.type currently only supports "http"
           - without a config file, Qazy defaults to attached http://127.0.0.1:3000
           - without a config file, --dev-command creates a managed local target
@@ -552,9 +552,9 @@ def build_scenario_parser(*, prog: str = "qazy") -> argparse.ArgumentParser:
     add_browser_args(parser)
     parser.add_argument(
         "--screenshot-strategy",
-        default="error",
-        choices=["none", "error", "single", "checkpoints"],
-        help="Screenshot capture policy",
+        default=None,
+        choices=list(SCREENSHOT_STRATEGIES),
+        help=f"Screenshot capture policy (default: config screenshotStrategy or {DEFAULT_SCREENSHOT_STRATEGY})",
     )
     return parser
 
@@ -655,7 +655,6 @@ def build_runtimes_parser() -> argparse.ArgumentParser:
 def add_run_batch_workspace_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root")
     parser.add_argument("--results-dir", type=Path, help="Override the results directory")
-    parser.add_argument("--logs-dir", type=Path, help="Override the log directory")
 
 
 def add_target_args(parser: argparse.ArgumentParser) -> None:
@@ -666,7 +665,8 @@ def add_target_args(parser: argparse.ArgumentParser) -> None:
 
 def add_logs_workspace_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--project-root", type=Path, default=Path.cwd(), help="Workspace root")
-    parser.add_argument("--logs-dir", type=Path, help="Override the log directory")
+    parser.add_argument("--config-file", type=Path, help="Path to a qazy.config.jsonc or qazy.config.json file")
+    parser.add_argument("--results-dir", type=Path, help="Override the results directory to scan")
 
 
 def add_rename_workspace_args(parser: argparse.ArgumentParser) -> None:
@@ -745,13 +745,11 @@ def workspace_from_args(
     args: argparse.Namespace,
     *,
     config_results_dir: Path | None = None,
-    config_logs_dir: Path | None = None,
 ):
     return workspace_from_root(
         args.project_root,
         scenarios_dir=getattr(args, "scenarios_dir", None),
         results_dir=getattr(args, "results_dir", None) or config_results_dir,
-        logs_dir=getattr(args, "logs_dir", None) or config_logs_dir,
     )
 
 
@@ -788,6 +786,12 @@ def runtime_defaults_from_target(
     )
 
 
+def discover_runtime_logs(results_dir: Path) -> list[Path]:
+    if not results_dir.exists():
+        return []
+    return sorted(path for path in results_dir.rglob("*.log") if not path.name.startswith("server-"))
+
+
 def resolve_cli_target(project_root: Path, target: str) -> bool:
     if glob.has_magic(target):
         return True
@@ -796,7 +800,7 @@ def resolve_cli_target(project_root: Path, target: str) -> bool:
     return resolved.is_dir()
 
 
-def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, Path | None, TargetDefinition, str]:
+def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, TargetDefinition, str, str]:
     try:
         config = load_config(args.project_root, config_file=args.config_file)
     except FileNotFoundError:
@@ -808,14 +812,19 @@ def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, Path | No
             raise RuntimeError("--base-url and --dev-command cannot be combined without a config file")
         return (
             None,
-            None,
             build_default_target(base_url=args.base_url, managed=args.dev_command is not None),
             args.runtime or DEFAULT_RUNTIME,
+            DEFAULT_SCREENSHOT_STRATEGY,
         )
 
     if args.base_url is not None:
         raise RuntimeError("--base-url is only supported when no config file is present")
-    return config.results_dir, config.logs_dir, get_target(config, args.target_name), args.runtime or config.default_runtime
+    return (
+        config.results_dir,
+        get_target(config, args.target_name),
+        args.runtime or config.default_runtime,
+        config.default_screenshot_strategy,
+    )
 
 
 def run_config_check(args: argparse.Namespace) -> int:
@@ -966,14 +975,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if command == "tokens":
         args = build_tokens_parser().parse_args(raw_argv[1:])
-        workspace = workspace_from_args(args)
+        config_results_dir = None
+        if args.results_dir is None and not args.logs:
+            try:
+                config_results_dir = load_config(args.project_root, config_file=args.config_file).results_dir
+            except FileNotFoundError:
+                pass
+        workspace = workspace_from_args(args, config_results_dir=config_results_dir)
         if args.logs:
             log_files = [Path(item) for item in args.logs]
         else:
-            if not workspace.logs_dir.exists():
-                print("No log files found")
-                return 1
-            log_files = sorted(path for path in workspace.logs_dir.glob("*.log") if not path.name.startswith("server-"))
+            log_files = discover_runtime_logs(workspace.results_dir)
         if not log_files:
             print("No log files found")
             return 1
@@ -1078,11 +1090,10 @@ def main(argv: list[str] | None = None) -> int:
     if not is_batch and args.max_workers is not None:
         parser.error("--max-workers requires a directory or glob target")
 
-    config_results_dir, config_logs_dir, target, runtime_name = resolve_run_target(args)
+    config_results_dir, target, runtime_name, default_screenshot_strategy = resolve_run_target(args)
     workspace = workspace_from_args(
         args,
         config_results_dir=config_results_dir,
-        config_logs_dir=config_logs_dir,
     )
     scenario_overrides = scenario_overrides_from_args(args)
     model, reasoning_effort = runtime_defaults_from_target(
@@ -1091,6 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
         model_override=args.model,
         reasoning_effort_override=args.reasoning_effort,
     )
+    screenshot_strategy = args.screenshot_strategy or default_screenshot_strategy
 
     if args.prompt is not None:
         result = run_prompt(
@@ -1106,7 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             dev_command=tuple(shlex.split(args.dev_command)) if args.dev_command else None,
             scenario_overrides=scenario_overrides,
-            screenshot_strategy=args.screenshot_strategy,
+            screenshot_strategy=screenshot_strategy,
             headed=args.headed,
         )
         print(result.results_file)
@@ -1126,7 +1138,7 @@ def main(argv: list[str] | None = None) -> int:
             timeout=args.timeout,
             dev_command=tuple(shlex.split(args.dev_command)) if args.dev_command else None,
             scenario_overrides=scenario_overrides,
-            screenshot_strategy=args.screenshot_strategy,
+            screenshot_strategy=screenshot_strategy,
             headed=args.headed,
         )
         print(result.results_file)

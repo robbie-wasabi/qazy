@@ -15,7 +15,7 @@ class ReportingTests(unittest.TestCase):
     def test_analyze_log_dedupes_claude_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            log_dir = root / ".qazy" / "logs"
+            log_dir = root / ".qazy" / "results" / "run-123" / "logs"
             log_dir.mkdir(parents=True)
             log_path = log_dir / "claude.log"
             log_path.write_text(
@@ -66,7 +66,7 @@ class ReportingTests(unittest.TestCase):
     def test_tokens_cli_sums_multiple_logs(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
-            log_dir = root / ".qazy" / "logs"
+            log_dir = root / ".qazy" / "results" / "run-123" / "logs"
             log_dir.mkdir(parents=True)
             (root / "user-scenarios").mkdir()
             (log_dir / "claude.log").write_text(

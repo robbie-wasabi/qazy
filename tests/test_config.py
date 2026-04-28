@@ -61,8 +61,9 @@ class ConfigTests(unittest.TestCase):
             payload = read_config_payload(path)
             self.assertEqual(payload["defaultTarget"], "local")
             self.assertEqual(payload["defaultRuntime"], "claude")
+            self.assertEqual(payload["screenshotStrategy"], "error")
             self.assertEqual(payload["resultsDir"], ".qazy/results")
-            self.assertEqual(payload["logsDir"], ".qazy/logs")
+            self.assertNotIn("logsDir", payload)
             self.assertEqual(payload["targets"]["local"]["mode"], "managed")
             self.assertEqual(payload["targets"]["local"]["ready"]["path"], "/")
             self.assertEqual(payload["targets"]["local"]["ports"]["appPort"], "auto")
@@ -74,8 +75,8 @@ class ConfigTests(unittest.TestCase):
 
             config = load_config(root)
             self.assertEqual(config.results_dir, (root / ".qazy/results").resolve())
-            self.assertEqual(config.logs_dir, (root / ".qazy/logs").resolve())
             self.assertEqual(config.default_runtime, "claude")
+            self.assertEqual(config.default_screenshot_strategy, "error")
 
     def test_config_template_text_parses_as_jsonc(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -216,6 +217,76 @@ class ConfigTests(unittest.TestCase):
 
         self.assertEqual(config.default_runtime, "codex")
 
+    def test_load_config_defaults_screenshot_strategy_to_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "http://127.0.0.1:3000",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        self.assertEqual(config.default_screenshot_strategy, "error")
+
+    def test_load_config_parses_screenshot_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "screenshotStrategy": "checkpoints",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "http://127.0.0.1:3000",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_config(root)
+
+        self.assertEqual(config.default_screenshot_strategy, "checkpoints")
+
+    def test_load_config_rejects_unknown_screenshot_strategy(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "qazy.config.json").write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "defaultTarget": "local",
+                        "screenshotStrategy": "polaroid",
+                        "targets": {
+                            "local": {
+                                "mode": "attached",
+                                "baseUrl": "http://127.0.0.1:3000",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "screenshotStrategy.*polaroid"):
+                load_config(root)
+
     def test_load_config_rejects_unknown_default_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
@@ -262,30 +333,6 @@ class ConfigTests(unittest.TestCase):
             config = load_config(root)
 
         self.assertEqual(config.results_dir, (root / "tmp" / "qazy-results").resolve())
-
-    def test_load_config_parses_logs_dir_relative_to_config_file(self) -> None:
-        with tempfile.TemporaryDirectory() as tempdir:
-            root = Path(tempdir)
-            (root / "qazy.config.json").write_text(
-                json.dumps(
-                    {
-                        "version": 1,
-                        "defaultTarget": "dev-remote",
-                        "logsDir": "tmp/qazy-logs",
-                        "targets": {
-                            "dev-remote": {
-                                "mode": "attached",
-                                "baseUrl": "https://dev.complora.com",
-                            }
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            config = load_config(root)
-
-        self.assertEqual(config.logs_dir, (root / "tmp" / "qazy-logs").resolve())
 
     def test_load_config_parses_target_scenario_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -345,7 +392,7 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "'resultsDir' must be a non-empty string"):
                 load_config(root)
 
-    def test_load_config_rejects_invalid_logs_dir(self) -> None:
+    def test_load_config_rejects_logs_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             root = Path(tempdir)
             (root / "qazy.config.json").write_text(
@@ -353,7 +400,7 @@ class ConfigTests(unittest.TestCase):
                     {
                         "version": 1,
                         "defaultTarget": "dev-remote",
-                        "logsDir": {},
+                        "logsDir": "tmp/qazy-logs",
                         "targets": {
                             "dev-remote": {
                                 "mode": "attached",
@@ -365,7 +412,7 @@ class ConfigTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(RuntimeError, "'logsDir' must be a non-empty string"):
+            with self.assertRaisesRegex(RuntimeError, "'logsDir' is no longer supported"):
                 load_config(root)
 
     def test_load_config_parses_auth_provider_scenario_defaults(self) -> None:

@@ -27,6 +27,8 @@ DEFAULT_BETTER_AUTH_COOKIE_PREFIX = "better-auth"
 DEFAULT_AUTH_BASE_PATH = "/api/auth"
 RUNTIME_NAMES = ("claude", "codex", "opencode")
 DEFAULT_RUNTIME = "claude"
+SCREENSHOT_STRATEGIES = ("none", "error", "single", "checkpoints")
+DEFAULT_SCREENSHOT_STRATEGY = "error"
 
 
 @dataclass(frozen=True)
@@ -79,9 +81,9 @@ class TargetDefinition:
 class QazyConfig:
     source: Path | None
     results_dir: Path | None
-    logs_dir: Path | None
     default_target: str
     default_runtime: str
+    default_screenshot_strategy: str
     targets: dict[str, TargetDefinition]
 
 
@@ -105,7 +107,6 @@ DEFAULT_ATTACHED_BASE_URL = "http://127.0.0.1:3000"
 DEFAULT_MANAGED_BASE_URL = "http://127.0.0.1:{appPort}"
 DEFAULT_READY_CHECK = ReadyCheck(type="http", path="/", timeout_seconds=60)
 DEFAULT_RESULTS_DIR = ".qazy/results"
-DEFAULT_LOGS_DIR = ".qazy/logs"
 DEFAULT_CONFIG_TEMPLATE_FILE = "qazy.config.jsonc"
 CONFIG_FILE_NAMES = ("qazy.config.json", "qazy.config.jsonc")
 
@@ -144,8 +145,8 @@ def build_example_config_payload() -> dict[str, object]:
         "version": 1,
         "defaultTarget": "local",
         "defaultRuntime": DEFAULT_RUNTIME,
+        "screenshotStrategy": DEFAULT_SCREENSHOT_STRATEGY,
         "resultsDir": DEFAULT_RESULTS_DIR,
-        "logsDir": DEFAULT_LOGS_DIR,
         "targets": {
             "local": {
                 "mode": "managed",
@@ -215,11 +216,12 @@ def build_config_template_text() -> str:
           // Runtime used when --runtime is omitted: "claude", "codex", or "opencode".
           "defaultRuntime": "{DEFAULT_RUNTIME}",
 
-          // Where result markdown and screenshots are written.
-          "resultsDir": "{DEFAULT_RESULTS_DIR}",
+          // Screenshot capture policy used when --screenshot-strategy is omitted:
+          // "none", "error", "single", or "checkpoints".
+          "screenshotStrategy": "{DEFAULT_SCREENSHOT_STRATEGY}",
 
-          // Where runtime and server logs are written.
-          "logsDir": "{DEFAULT_LOGS_DIR}",
+          // Where result markdown, screenshots, and logs are written.
+          "resultsDir": "{DEFAULT_RESULTS_DIR}",
 
           "targets": {{
             "local": {{
@@ -498,6 +500,11 @@ def load_config(project_root: Path, *, config_file: Path | None = None) -> QazyC
     version = payload.get("version", 1)
     if version != 1:
         raise RuntimeError(f"Invalid Qazy config at {path}: unsupported version {version}")
+    if "logsDir" in payload:
+        raise RuntimeError(
+            f"Invalid Qazy config at {path}: 'logsDir' is no longer supported; "
+            "logs are written under resultsDir/<run-id>/logs"
+        )
 
     targets_payload = payload.get("targets")
     if not isinstance(targets_payload, dict) or not targets_payload:
@@ -521,15 +528,22 @@ def load_config(project_root: Path, *, config_file: Path | None = None) -> QazyC
             f"'{default_runtime}'; must be one of: {joined}"
         )
 
+    default_screenshot_strategy = payload.get("screenshotStrategy", DEFAULT_SCREENSHOT_STRATEGY)
+    if default_screenshot_strategy not in SCREENSHOT_STRATEGIES:
+        joined = ", ".join(SCREENSHOT_STRATEGIES)
+        raise RuntimeError(
+            f"Invalid Qazy config at {path}: unsupported screenshotStrategy "
+            f"'{default_screenshot_strategy}'; must be one of: {joined}"
+        )
+
     results_dir = parse_optional_path(path, "resultsDir", payload.get("resultsDir"))
-    logs_dir = parse_optional_path(path, "logsDir", payload.get("logsDir"))
 
     return QazyConfig(
         source=path,
         results_dir=results_dir,
-        logs_dir=logs_dir,
         default_target=default_target,
         default_runtime=default_runtime,
+        default_screenshot_strategy=default_screenshot_strategy,
         targets=targets,
     )
 

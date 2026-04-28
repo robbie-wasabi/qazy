@@ -42,7 +42,6 @@ class RunnerPromptTests(unittest.TestCase):
             workspace = workspace_from_root(root)
 
         self.assertEqual(workspace.results_dir, (root / ".qazy" / "results").resolve())
-        self.assertEqual(workspace.logs_dir, (root / ".qazy" / "logs").resolve())
 
     def test_wait_for_target_ready_explains_how_to_fix_missing_app(self) -> None:
         ready = ReadyCheck(type="http", path="/", timeout_seconds=0)
@@ -159,7 +158,6 @@ class RunnerPromptTests(unittest.TestCase):
                 project_root=root,
                 scenarios_dir=root / "user-scenarios",
                 results_dir=root / ".qazy/results",
-                logs_dir=root / ".qazy" / "logs",
             )
 
             with (
@@ -173,7 +171,7 @@ class RunnerPromptTests(unittest.TestCase):
                     runtime=runtime.name,
                     final_text="PASS manual login",
                     transcript=["PASS manual login"],
-                    log_path=workspace.logs_dir / "stub.log",
+                    log_path=workspace.results_dir / "logs" / "stub.log",
                 )
 
                 result = _run_single_section(
@@ -247,7 +245,6 @@ class RunnerPromptTests(unittest.TestCase):
                 project_root=root,
                 scenarios_dir=root / "user-scenarios",
                 results_dir=root / ".qazy/results",
-                logs_dir=root / ".qazy" / "logs",
             )
 
             with (

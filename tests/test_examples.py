@@ -128,14 +128,13 @@ class ExampleProjectsTests(unittest.TestCase):
                 workspace = workspace_from_root(
                     root,
                     results_dir=temp_root / "results",
-                    logs_dir=temp_root / "logs",
                 )
                 config = load_config(root)
                 target = get_target(config, None)
                 resolved = resolve_target(target, allocate_port=reserve_port)
                 server = None
                 try:
-                    server = start_managed_target(workspace, resolved)
+                    server = start_managed_target(workspace, resolved, logs_dir=workspace.results_dir / "logs")
                     wait_for_target_ready(resolved.base_url, resolved.ready, process=server)
                     response = urllib.request.urlopen(f"{resolved.base_url}/index.html", timeout=5)
                     body = response.read().decode()
@@ -154,7 +153,6 @@ class ExampleProjectsTests(unittest.TestCase):
             make_executable(bin_dir / "claude", FAKE_CLAUDE)
             browser_log = temp_root / "agent-browser.log"
             results_dir = temp_root / "results"
-            logs_dir = temp_root / "logs"
 
             env_patch = patch.dict(
                 os.environ,
@@ -175,8 +173,6 @@ class ExampleProjectsTests(unittest.TestCase):
                         str(root),
                         "--results-dir",
                         str(results_dir),
-                        "--logs-dir",
-                        str(logs_dir),
                         "user-scenarios/login",
                     ]
                 )
