@@ -639,14 +639,15 @@ def dedupe_scenario_files(files: list[Path]) -> list[Path]:
 
 
 def find_scenarios(workspace: Workspace, target: str) -> list[str]:
-    if glob.has_magic(target):
+    resolved_target = resolve_input_path(workspace.project_root, target)
+    literal_exists = resolved_target.exists() or Path(f"{resolved_target}.scenario.md").exists()
+
+    if glob.has_magic(target) and not literal_exists:
         scenario_files = collect_scenarios_from_glob(workspace.project_root, target)
+    elif resolved_target.is_dir():
+        scenario_files = collect_scenarios_from_directory(resolved_target)
     else:
-        resolved_target = resolve_input_path(workspace.project_root, target)
-        if resolved_target.is_dir():
-            scenario_files = collect_scenarios_from_directory(resolved_target)
-        else:
-            scenario_files = [resolve_scenario_file(workspace.project_root, target)]
+        scenario_files = [resolve_scenario_file(workspace.project_root, target)]
 
     return [scenario_display_path(workspace.project_root, path) for path in dedupe_scenario_files(scenario_files)]
 

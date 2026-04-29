@@ -13,6 +13,7 @@ from qazy.runner import (
     _run_prepared_scenario,
     _run_single_section,
     build_prompt,
+    find_scenarios,
     wait_for_target_ready,
     workspace_from_root,
 )
@@ -273,6 +274,60 @@ class RunnerPromptTests(unittest.TestCase):
         self.assertIn("set target.scenarioDefaults.email/password", error_text)
         self.assertIn("pass --email and --password", error_text)
         self.assertIn("**Model**: gpt-5.4-mini", error_text)
+
+
+class FindScenariosBracketPathTests(unittest.TestCase):
+    def test_literal_bracket_path_is_not_treated_as_glob(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            scenario_dir = root / "src" / "app" / "(dashboard)" / "filings" / "[id]"
+            scenario_dir.mkdir(parents=True)
+            scenario_file = scenario_dir / "detail.scenario.md"
+            scenario_file.write_text("# detail\n", encoding="utf-8")
+
+            workspace = Workspace(
+                project_root=root,
+                scenarios_dir=root / "user-scenarios",
+                results_dir=root / ".qazy/results",
+            )
+
+            results = find_scenarios(workspace, "src/app/(dashboard)/filings/[id]/detail.scenario.md")
+
+        self.assertEqual(results, ["src/app/(dashboard)/filings/[id]/detail"])
+
+    def test_literal_bracket_directory_collects_children(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            scenario_dir = root / "filings" / "[id]"
+            scenario_dir.mkdir(parents=True)
+            (scenario_dir / "a.scenario.md").write_text("# a\n", encoding="utf-8")
+            (scenario_dir / "b.scenario.md").write_text("# b\n", encoding="utf-8")
+
+            workspace = Workspace(
+                project_root=root,
+                scenarios_dir=root / "user-scenarios",
+                results_dir=root / ".qazy/results",
+            )
+
+            results = find_scenarios(workspace, "filings/[id]")
+
+        self.assertEqual(results, ["filings/[id]/a", "filings/[id]/b"])
+
+    def test_glob_pattern_still_expands_when_literal_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            (root / "a.scenario.md").write_text("# a\n", encoding="utf-8")
+            (root / "b.scenario.md").write_text("# b\n", encoding="utf-8")
+
+            workspace = Workspace(
+                project_root=root,
+                scenarios_dir=root / "user-scenarios",
+                results_dir=root / ".qazy/results",
+            )
+
+            results = find_scenarios(workspace, "*.scenario.md")
+
+        self.assertEqual(results, ["a", "b"])
 
 
 if __name__ == "__main__":

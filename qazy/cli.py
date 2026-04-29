@@ -793,11 +793,13 @@ def discover_runtime_logs(results_dir: Path) -> list[Path]:
 
 
 def resolve_cli_target(project_root: Path, target: str) -> bool:
-    if glob.has_magic(target):
-        return True
     candidate = Path(target).expanduser()
     resolved = candidate.resolve() if candidate.is_absolute() else (project_root / candidate).resolve()
-    return resolved.is_dir()
+    if resolved.is_dir():
+        return True
+    if resolved.is_file() or Path(f"{resolved}.scenario.md").is_file():
+        return False
+    return glob.has_magic(target)
 
 
 def resolve_run_target(args: argparse.Namespace) -> tuple[Path | None, TargetDefinition, str, str]:
