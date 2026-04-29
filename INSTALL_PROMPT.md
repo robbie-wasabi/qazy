@@ -44,8 +44,8 @@ test.
   `ports.appPort: "auto"` and `env.PORT: "{appPort}"`; the documented URL
   (usually `http://127.0.0.1:3000`) for attached.
 - **Ready path:** `/` unless the project clearly uses a health route.
-- **Runtime:** `claude` (Qazy's default). If only one of `claude`, `codex`,
-  `opencode` is installed, pick that.
+- **Runtime:** `claude` (Qazy's default). If only one of `claude` or `codex`
+  is installed, pick that.
 - **Auth:** `useCookie: false` unless the app is obviously NextAuth or
   Better Auth with credentials login. Ask whether to add safe test fallback
   credentials in `scenarioDefaults`, but leave credentials out by default.
@@ -66,7 +66,7 @@ test.
 ## Config cheat sheet
 
 Top-level: `version` (1), `defaultTarget`, `defaultRuntime`
-(`claude` | `codex` | `opencode`), `resultsDir`, `targets`.
+(`claude` | `codex`), `resultsDir`, `targets`.
 
 Target: `mode` (`managed` | `attached`), `baseUrl`, `devCommand` (managed
 only), `ports` (`appPort`, `mongoPort` — int or `"auto"`), `env`, `ready`,

@@ -25,7 +25,7 @@ AUTH_PROVIDERS = ("nextauth", "better-auth")
 DEFAULT_AUTH_PROVIDER = "nextauth"
 DEFAULT_BETTER_AUTH_COOKIE_PREFIX = "better-auth"
 DEFAULT_AUTH_BASE_PATH = "/api/auth"
-RUNTIME_NAMES = ("claude", "codex", "opencode")
+RUNTIME_NAMES = ("claude", "codex")
 DEFAULT_RUNTIME = "claude"
 SCREENSHOT_STRATEGIES = ("none", "error", "single", "checkpoints")
 DEFAULT_SCREENSHOT_STRATEGY = "error"
@@ -183,10 +183,6 @@ def build_example_config_payload() -> dict[str, object]:
                         "model": None,
                         "reasoningEffort": None,
                     },
-                    "opencode": {
-                        "model": None,
-                        "reasoningEffort": None,
-                    },
                 },
             },
             "attached-local": {
@@ -213,7 +209,7 @@ def build_config_template_text() -> str:
           // Target used when --target is omitted.
           "defaultTarget": "local",
 
-          // Runtime used when --runtime is omitted: "claude", "codex", or "opencode".
+          // Runtime used when --runtime is omitted: "claude" or "codex".
           "defaultRuntime": "{DEFAULT_RUNTIME}",
 
           // Screenshot capture policy used when --screenshot-strategy is omitted:
@@ -276,10 +272,6 @@ def build_config_template_text() -> str:
                 "claude": {{
                   // "model": "claude-sonnet-4-5",
                   // "reasoningEffort": "default"
-                }},
-                "opencode": {{
-                  // "model": "openai/gpt-5.4-mini",
-                  // "reasoningEffort": "standard"
                 }}
               }}
             }}

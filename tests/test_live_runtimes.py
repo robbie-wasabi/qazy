@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import tempfile
 import unittest
 from pathlib import Path
 
@@ -26,9 +25,3 @@ class LiveRuntimeTests(unittest.TestCase):
         self.assertTrue(probe.smoke_ok, probe.detail)
         self.assertEqual(probe.detail, "OK")
 
-    @unittest.skipUnless(shutil.which("opencode"), "opencode CLI not installed")
-    def test_opencode_smoke_probe_reports_real_status(self) -> None:
-        probe = probe_runtime("opencode", cwd=self.cwd, smoke=True)
-        self.assertTrue(probe.installed)
-        self.assertFalse(probe.smoke_ok)
-        self.assertTrue(probe.detail)

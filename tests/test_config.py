@@ -70,7 +70,6 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(payload["targets"]["local"]["scenarioDefaults"]["authProvider"], "nextauth")
             self.assertIn("codex", payload["targets"]["local"]["runtimeDefaults"])
             self.assertIn("claude", payload["targets"]["local"]["runtimeDefaults"])
-            self.assertIn("opencode", payload["targets"]["local"]["runtimeDefaults"])
             self.assertNotIn("attached-local", payload["targets"])
 
             config = load_config(root)

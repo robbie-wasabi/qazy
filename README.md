@@ -29,7 +29,7 @@ pipx ensurepath
 ## Requirements
 
 - [Agent Browser](https://agent-browser.io/) on `PATH`
-- at least one runtime CLI on `PATH`: [Claude Code](https://code.claude.com/docs/en/overview) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), or [OpenCode](https://opencode.ai/) (`opencode`)
+- at least one runtime CLI on `PATH`: [Claude Code](https://code.claude.com/docs/en/overview) (`claude`) or [Codex CLI](https://developers.openai.com/codex/cli) (`codex`)
 - either a `qazy.config.jsonc`, `qazy.config.json`, or enough CLI flags to use the built-in defaults
 
 Check the installed runtimes with:
@@ -201,7 +201,7 @@ Scenario files are checked-in markdown files that make a flow repeatable. Use th
 
 Targets tell Qazy where the app is. An `attached` target points at an already-running app. A `managed` target starts `devCommand`, waits for the app to respond, runs the check, then stops the process.
 
-Runtimes are the agent CLIs that drive the browser. Qazy currently supports [Claude Code](https://code.claude.com/docs/en/overview) (`claude`), [Codex CLI](https://developers.openai.com/codex/cli) (`codex`), and [OpenCode](https://opencode.ai/) (`opencode`).
+Runtimes are the agent CLIs that drive the browser. Qazy currently supports [Claude Code](https://code.claude.com/docs/en/overview) (`claude`) and [Codex CLI](https://developers.openai.com/codex/cli) (`codex`).
 
 Authentication can be handled by Qazy's built-in cookie flow with `--use-cookie`, or by the runtime interacting with the login page in the browser with `--no-use-cookie`.
 
@@ -237,7 +237,7 @@ Useful run options:
 - `--target` picks a named target
 - `--base-url` runs without a config file against an existing app URL
 - `--dev-command` starts a managed app without requiring a config file
-- `--runtime` chooses `claude`, `codex`, or `opencode`
+- `--runtime` chooses `claude` or `codex`
 - `--model` and `--reasoning-effort` forward runtime-specific tuning
 - `--email`, `--password`, `--start-page`, `--use-cookie`, `--no-use-cookie` override scenario values
 - `--headed` or `--headless` controls browser visibility
@@ -275,8 +275,9 @@ Top-level fields:
 
 - `version`: currently `1`
 - `defaultTarget`: target used when `--target` is omitted
-- `defaultRuntime`: runtime used when `--runtime` is omitted, one of `claude`, `codex`, or `opencode`
+- `defaultRuntime`: runtime used when `--runtime` is omitted, one of `claude` or `codex`
 - `resultsDir`: default directory for result markdown, screenshots, and logs; Qazy defaults to `.qazy/results`
+- `screenshotStrategy`: default screenshot capture policy, one of `none`, `error`, `single`, or `checkpoints` (defaults to `error`); overridden by `--screenshot-strategy`
 - `targets`: named target definitions
 
 Target fields:
@@ -393,7 +394,6 @@ Supported runtime adapters today:
 
 - [Claude Code](https://code.claude.com/docs/en/overview) (`claude`)
 - [Codex CLI](https://developers.openai.com/codex/cli) (`codex`)
-- [OpenCode](https://opencode.ai/) (`opencode`)
 
 Use `qazy runtimes` to check installation and `qazy runtimes --smoke` to verify a trivial invocation works in the current environment.
 

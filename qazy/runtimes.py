@@ -245,58 +245,8 @@ class CodexRuntime(RuntimeAdapter):
         return []
 
 
-class OpenCodeRuntime(RuntimeAdapter):
-    name = "opencode"
-    executable = "opencode"
-
-    def build_command(
-        self,
-        prompt: str,
-        *,
-        cwd: Path,
-        model: str | None = None,
-        reasoning_effort: str | None = None,
-    ) -> RuntimeCommand:
-        argv = [
-            self.executable,
-            "run",
-            "--format",
-            "json",
-            "--dir",
-            str(cwd),
-        ]
-        if model:
-            argv.extend(["--model", model])
-        if reasoning_effort:
-            argv.extend(["--variant", reasoning_effort])
-        argv.append(prompt)
-        return RuntimeCommand(argv=argv)
-
-    def consume_line(self, line: str, *, state: RuntimeState, cwd: Path) -> list[str]:
-        event = try_parse_json(line)
-        if not event:
-            cleaned = strip_ansi(line)
-            return [cleaned] if cleaned.strip() else []
-
-        event_type = event.get("type")
-        if event_type == "error":
-            error = event.get("error", {})
-            detail = ""
-            if isinstance(error, dict):
-                detail = extract_text(error)
-            state.error = detail or "OpenCode reported an error"
-            return [state.error]
-
-        text = extract_text(event)
-        if text:
-            state.transcript.append(text)
-            state.final_text = text
-            return [text]
-        return []
-
-
 def list_runtimes() -> list[RuntimeAdapter]:
-    return [ClaudeRuntime(), CodexRuntime(), OpenCodeRuntime()]
+    return [ClaudeRuntime(), CodexRuntime()]
 
 
 def get_runtime(name: str) -> RuntimeAdapter:
@@ -475,20 +425,3 @@ def strip_ansi(value: str) -> str:
         .replace("\u001b[48;5;235m", "")
         .replace("\u001b[48;5;238m", "")
     )
-
-
-def extract_text(value: Any) -> str:
-    if isinstance(value, str):
-        return value.strip()
-    if isinstance(value, dict):
-        for key in ("text", "message", "content", "error", "data"):
-            if key in value:
-                extracted = extract_text(value[key])
-                if extracted:
-                    return extracted
-        return ""
-    if isinstance(value, list):
-        parts = [extract_text(item) for item in value]
-        joined = " ".join(part for part in parts if part)
-        return joined.strip()
-    return ""
