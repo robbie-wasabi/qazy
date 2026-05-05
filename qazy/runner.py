@@ -42,8 +42,8 @@ LOG_LOCK = threading.Lock()
 PORT_LOCK = threading.Lock()
 ALLOCATED_PORTS: set[int] = set()
 ANSI_RESET = "\033[0m"
-HEADED_VIEWPORT_WIDTH = 1728
-HEADED_VIEWPORT_HEIGHT = 1117
+VIEWPORT_WIDTH = 1728
+VIEWPORT_HEIGHT = 1117
 
 COLOR_PALETTE = (
     39, 45, 51, 75, 81, 111, 117, 141, 147, 177,
@@ -996,8 +996,7 @@ def prime_browser(
     run_ab("open", base_url)
     run_ab("cookies", "set", auth_session.cookie_name, auth_session.session_token)
     run_ab("open", start_url)
-    if headed:
-        run_ab("set", "viewport", str(HEADED_VIEWPORT_WIDTH), str(HEADED_VIEWPORT_HEIGHT))
+    run_ab("set", "viewport", str(VIEWPORT_WIDTH), str(VIEWPORT_HEIGHT))
     time.sleep(2)
     log(f"browser ready at {start_url}", prefix=prefix, color=color)
 
@@ -1026,8 +1025,7 @@ def prime_browser_no_auth(
             raise RuntimeError(f"agent-browser {' '.join(args)} failed: {result.stderr.strip()}")
 
     run_ab("open", start_url)
-    if headed:
-        run_ab("set", "viewport", str(HEADED_VIEWPORT_WIDTH), str(HEADED_VIEWPORT_HEIGHT))
+    run_ab("set", "viewport", str(VIEWPORT_WIDTH), str(VIEWPORT_HEIGHT))
     time.sleep(2)
     log(f"browser ready at {start_url}", prefix=prefix, color=color)
 
