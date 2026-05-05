@@ -4,6 +4,39 @@ Qazy is a Python CLI for agent-driven browser QA. It can start a local app or at
 
 Use Qazy when you want a browser agent to walk through user-facing flows such as login, onboarding, checkout, dashboard checks, or smoke tests that are easier to describe in natural language than in deterministic test code.
 
+## Why Qazy over a plain agent skill?
+
+A skill can tell an agent "open the browser and check login." Qazy is the harness around that prompt so the same check is repeatable, parallel, and CI-friendly:
+
+- **Managed dev server** — starts your app on a free port, waits for ready, stops it after the run
+- **Built-in auth** — NextAuth or Better Auth cookie injection so the agent skips login boilerplate
+- **Runtime-agnostic** — the same scenario runs under Claude Code or Codex
+- **Structured outputs** — markdown reports, screenshots, runtime logs, and `0`/`1` exit codes
+- **Parallel orchestration** — fans scenarios across workers when the target is `parallelSafe` (recommended: pair with [ephemeralenv](https://github.com/robbie-wasabi/ephemeralenv) for per-run DB/state isolation)
+- **Checked-in scenarios** — version-controlled `*.scenario.md` files with frontmatter for credentials, start page, and auth, instead of ad hoc prompts
+- **Token accounting** — `qazy tokens` summarizes per-run runtime usage
+
+Reach for a skill when exploring; reach for Qazy when you want the same flow to run on every PR.
+
+### Recommended: pair with ephemeralenv
+
+[ephemeralenv](https://github.com/robbie-wasabi/ephemeralenv) gives each run a fresh database, deterministic ports, and seed data with no Docker. Point Qazy's `devCommand` at it and every run (parallel or not) gets an isolated stack:
+
+```jsonc
+{
+  "targets": {
+    "local": {
+      "mode": "managed",
+      "devCommand": "pnpm exec ephemeralenv",
+      "ports": { "appPort": "auto" },
+      "parallelSafe": true
+    }
+  }
+}
+```
+
+ephemeralenv handles the DB/seed lifecycle; Qazy handles port allocation, readiness, the agent run, and teardown.
+
 ## Install
 
 With Homebrew:
