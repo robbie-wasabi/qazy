@@ -97,6 +97,23 @@ class RunnerPromptTests(unittest.TestCase):
             prompt.index("## list"),
         )
 
+    def test_build_prompt_includes_radix_portal_guidance(self) -> None:
+        prompt = build_prompt(
+            "## list\n- [ ] verify popover content",
+            base_url="http://127.0.0.1:3000",
+            start_page="/dashboard",
+            email="tester@example.com",
+            password="tester123",
+            primed=True,
+            screenshot_strategy="none",
+        )
+
+        self.assertIn("[data-radix-popper-content-wrapper]", prompt)
+        self.assertIn("[role=dialog]", prompt)
+        self.assertIn("[role=menu]", prompt)
+        self.assertIn("[role=listbox]", prompt)
+        self.assertIn("snapshot -s", prompt)
+
     def test_build_prompt_does_not_include_credentials_when_primed(self) -> None:
         prompt = build_prompt(
             "## list\n- [ ] verify account settings",

@@ -90,6 +90,26 @@ Snapshot strategy:
 - Always snapshot after navigation or clicks to get fresh refs
 - Refs (`@e1`, `@e2`, etc.) change on every snapshot
 - Use sleep 1-3 between commands when the page needs render time
+
+Verifying content inside Radix UI / shadcn primitives:
+
+`snapshot -c` walks the React main root and prunes non-semantic wrappers, so it has two blind spots when verifying content (not when finding click targets):
+
+1. Portaled content (Radix `Popover`, `Dialog`, `AlertDialog`, `DropdownMenu`, `Select`, `Tooltip`, `HoverCard`, `Sheet`, `ContextMenu`) mounts at `<body>` outside the main root and will look missing.
+2. Compact mode strips `<div>`/`<span>`/`<p>` without aria roles and drops their text with them, so listitems with `<div><span>...</span></div>` content render as empty `listitem [level=1]` placeholders.
+
+If the trigger flips `aria-expanded=true` but a snapshot looks empty, switch to a scoped or full snapshot before reporting FAIL:
+
+| Surface | Verify with |
+|---|---|
+| Radix `Popover` | `agent-browser snapshot -s '[data-radix-popper-content-wrapper]'` |
+| Radix `Dialog` / `AlertDialog` / `Sheet` | `agent-browser snapshot -s '[role=dialog]'` |
+| Radix `DropdownMenu` / `ContextMenu` | `agent-browser snapshot -s '[role=menu]'` |
+| Radix `Select` listbox | `agent-browser snapshot -s '[role=listbox]'` |
+| Custom feeds / non-semantic content | `agent-browser snapshot` (drop `-c`) |
+| Last resort | `agent-browser eval "document.querySelector('<sel>').innerText"` |
+
+Compact mode is still the right default for finding click targets — these patterns only matter when verifying *content* inside a portal or non-semantic wrapper.
 """
 
 WORD_LIST = [
